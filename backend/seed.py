@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -14,7 +14,6 @@ from app.models import (
     User,
     UserRole,
 )
-
 
 RETAILERS = [
     {
@@ -45,7 +44,7 @@ RETAILERS = [
 
 PRODUCTS = [
     {
-        "sku": "GB-075",
+        "sku": "SKU-BS-075",
         "name": "Glucose Biscuit 75g",
         "brand": "Sample Foods",
         "category": "Biscuits",
@@ -55,7 +54,7 @@ PRODUCTS = [
         "pack_price": Decimal("8.10"),
     },
     {
-        "sku": "DW-1000",
+        "sku": "SKU-DT-1KG",
         "name": "Detergent Powder 1kg",
         "brand": "Sample Home Care",
         "category": "Home Care",
@@ -65,7 +64,7 @@ PRODUCTS = [
         "pack_price": Decimal("101.50"),
     },
     {
-        "sku": "TE-250",
+        "sku": "SKU-TE-250",
         "name": "Tea 250g",
         "brand": "Sample Beverages",
         "category": "Beverages",
@@ -76,14 +75,62 @@ PRODUCTS = [
     },
 ]
 
+SCHEMES = [
+    {
+        "sku": "SKU-BS-075",
+        "name": "Buy 10 cases, get 1 free",
+        "scheme_type": SchemeType.FREE_GOODS,
+        "minimum_quantity": 10,
+        "free_quantity": 1,
+        "discount_percent": Decimal("0.00"),
+    },
+    {
+        "sku": "SKU-DT-1KG",
+        "name": "3% off on 5 or more cases",
+        "scheme_type": SchemeType.SLAB_DISCOUNT,
+        "minimum_quantity": 5,
+        "free_quantity": 0,
+        "discount_percent": Decimal("3.00"),
+    },
+]
+
+# Earlier versions of this seed used non-brief SKU codes. Map each brief code
+# to its legacy code so a rerun renames existing rows in place (keeping their
+# IDs, prices and schemes) instead of inserting duplicate products.
+LEGACY_SKUS = {
+    "SKU-BS-075": "GB-075",
+    "SKU-DT-1KG": "DW-1000",
+    "SKU-TE-250": "TE-250",
+}
+
+
+def find_or_migrate_product(session, sku: str) -> Product | None:
+    product = session.scalar(select(Product).where(Product.sku == sku))
+    legacy_sku = LEGACY_SKUS.get(sku)
+    legacy = (
+        session.scalar(select(Product).where(Product.sku == legacy_sku))
+        if legacy_sku
+        else None
+    )
+
+    if product is not None and legacy is not None:
+        raise RuntimeError(
+            f"Both {sku} and legacy {legacy_sku} exist; resolve the "
+            "duplicate product manually before reseeding."
+        )
+
+    if product is None and legacy is not None:
+        legacy.sku = sku
+        return legacy
+
+    return product
+
 
 def seed_users_and_retailers(session) -> list[Retailer]:
     retailers = []
 
     for data in RETAILERS:
-        user = session.scalar(
-            select(User).where(User.phone_number == data["phone"])
-        )
+        user = session.scalar(select(User).where(User.phone_number == data["phone"]))
 
         if user is None:
             user = User(
@@ -95,9 +142,7 @@ def seed_users_and_retailers(session) -> list[Retailer]:
             session.add(user)
             session.flush()
 
-        retailer = session.scalar(
-            select(Retailer).where(Retailer.user_id == user.id)
-        )
+        retailer = session.scalar(select(Retailer).where(Retailer.user_id == user.id))
 
         if retailer is None:
             retailer = Retailer(
@@ -135,9 +180,7 @@ def seed_products_and_prices(session, retailers: list[Retailer]) -> dict:
     products = {}
 
     for data in PRODUCTS:
-        product = session.scalar(
-            select(Product).where(Product.sku == data["sku"])
-        )
+        product = find_or_migrate_product(session, data["sku"])
 
         if product is None:
             product = Product(sku=data["sku"])
@@ -181,28 +224,9 @@ def seed_products_and_prices(session, retailers: list[Retailer]) -> dict:
 
 
 def seed_schemes(session, products: dict) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
-    scheme_data = [
-        {
-            "sku": "GB-075",
-            "name": "Buy 10 cases, get 1 free",
-            "scheme_type": SchemeType.FREE_GOODS,
-            "minimum_quantity": 10,
-            "free_quantity": 1,
-            "discount_percent": Decimal("0.00"),
-        },
-        {
-            "sku": "DW-1000",
-            "name": "3% off on 5 or more cases",
-            "scheme_type": SchemeType.SLAB_DISCOUNT,
-            "minimum_quantity": 5,
-            "free_quantity": 0,
-            "discount_percent": Decimal("3.00"),
-        },
-    ]
-
-    for data in scheme_data:
+    for data in SCHEMES:
         product = products[data["sku"]]
 
         scheme = session.scalar(
@@ -229,11 +253,21 @@ def seed_schemes(session, products: dict) -> None:
         scheme.is_active = True
 
 
+def seed_all(session) -> None:
+    """Seed all sample data into the given session.
+
+    Flushes but never commits: the caller owns the transaction. Tests pass a
+    session whose transaction is rolled back; seed_database() commits.
+    """
+    retailers = seed_users_and_retailers(session)
+    products = seed_products_and_prices(session, retailers)
+    seed_schemes(session, products)
+    session.flush()
+
+
 def seed_database() -> None:
     with SessionLocal.begin() as session:
-        retailers = seed_users_and_retailers(session)
-        products = seed_products_and_prices(session, retailers)
-        seed_schemes(session, products)
+        seed_all(session)
 
     print("OrderBridge sample data seeded successfully.")
     print("Retailers: 3")

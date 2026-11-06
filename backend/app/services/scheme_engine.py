@@ -68,9 +68,7 @@ def calculate_scheme(
                 raise ValueError("Unsupported scheme type.")
 
     subtotal = money(unit_price * quantity)
-    discount_amount = money(
-        subtotal * discount_percent / Decimal(100)
-    )
+    discount_amount = money(subtotal * discount_percent / Decimal(100))
     grand_total = money(subtotal - discount_amount)
 
     return SchemeResult(
