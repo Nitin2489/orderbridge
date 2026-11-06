@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -19,6 +20,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 from app.models.enums import ProductStatus, UserRole
 
+if TYPE_CHECKING:
+    from app.models.auth import UserSession
+
 
 class User(Base):
     __tablename__ = "users"
@@ -28,9 +32,7 @@ class User(Base):
     )
     phone_number: Mapped[str] = mapped_column(String(15), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120))
-    role: Mapped[UserRole] = mapped_column(
-        String(20), default=UserRole.RETAILER
-    )
+    role: Mapped[UserRole] = mapped_column(String(20), default=UserRole.RETAILER)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -39,6 +41,7 @@ class User(Base):
     retailer: Mapped["Retailer | None"] = relationship(
         back_populates="user", uselist=False
     )
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")
 
 
 class Retailer(Base):

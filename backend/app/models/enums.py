@@ -25,6 +25,15 @@ class OrderStatus(StrEnum):
     EXPORTED = "exported"
 
 
+class OrderEventType(StrEnum):
+    SUBMITTED = "submitted"
+    CONFIRMED = "confirmed"
+    PLACED_ON_HOLD = "placed_on_hold"
+    REJECTED = "rejected"
+    EXPORTED = "exported"
+    HOLD_RELEASED = "hold_released"  # reserved; no endpoint creates it yet
+
+
 class OrderSource(StrEnum):
     RETAILER_APP = "retailer_app"
     AI_TEXT = "ai_text"

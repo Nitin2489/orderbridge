@@ -1,12 +1,11 @@
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
-from app.core.database import engine
 
-
-def test_database_connection() -> None:
+def test_database_connection(test_engine: Engine) -> None:
     """Verify that the application can connect to PostgreSQL."""
 
-    with engine.connect() as connection:
+    with test_engine.connect() as connection:
         result = connection.execute(text("SELECT 1"))
 
     assert result.scalar_one() == 1
