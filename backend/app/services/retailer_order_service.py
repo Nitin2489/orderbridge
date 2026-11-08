@@ -178,6 +178,10 @@ def _repeat_fingerprint(source_order_id: UUID) -> str:
     )
 
 
+def _capture_fingerprint(capture_id: UUID) -> str:
+    return request_fingerprint({"kind": "capture", "capture_id": str(capture_id)})
+
+
 def _lock_retailer(session: Session, retailer_id: UUID) -> Retailer:
     retailer = session.scalar(
         select(Retailer)
@@ -327,6 +331,9 @@ def _create_order(
     notes: str | None,
     now: datetime,
     source_order_id: UUID | None = None,
+    source: OrderSource = OrderSource.RETAILER_APP,
+    actor_user_id: UUID | None = None,
+    event_details: dict | None = None,
 ) -> Order:
     if not lines:
         raise InvalidOrderRequestError("The order has no lines.")
@@ -357,7 +364,7 @@ def _create_order(
     order = Order(
         order_number=_next_order_number(session, now),
         retailer_id=retailer.id,
-        source=OrderSource.RETAILER_APP,
+        source=source,
         status=OrderStatus.PENDING_REVIEW,
         subtotal=sum((e.pricing.result.subtotal for e in priced), ZERO),
         discount_total=sum((e.pricing.result.discount_amount for e in priced), ZERO),
@@ -371,17 +378,20 @@ def _create_order(
     session.add(order)
 
     # Only reached for a newly created order, never for an idempotent retry.
-    # The actor is the retailer's own user, from the locked retailer row.
+    # The actor is the retailer's own user, from the locked retailer row,
+    # unless the caller acted for the retailer (a captured message).
     details = {"client_request_id": str(client_request_id)}
     if source_order_id is not None:
         details["repeat_of_order_id"] = str(source_order_id)
+    if event_details:
+        details.update(event_details)
     record_order_event(
         session,
         order,
         event_type=OrderEventType.SUBMITTED,
         from_status=None,
         to_status=OrderStatus.PENDING_REVIEW,
-        actor_user_id=retailer.user_id,
+        actor_user_id=actor_user_id or retailer.user_id,
         details=details,
         now=now,
     )
@@ -476,6 +486,52 @@ def repeat_order(
         notes=None,
         now=now or _utcnow(),
         source_order_id=source.id,
+    )
+    return SubmissionResult(order=order, created=True)
+
+
+def submit_capture_order(
+    session: Session,
+    retailer_id: UUID,
+    lines: list[OrderLineInput],
+    *,
+    capture_id: UUID,
+    client_request_id: UUID,
+    actor_user_id: UUID,
+    now: datetime | None = None,
+) -> SubmissionResult:
+    """Create the PENDING_REVIEW order for a reviewed captured message.
+
+    The same path as submit_order(): the retailer row is locked, the
+    client_request_id is idempotent per retailer, and every line is priced
+    by the shared pricing service (every issue reported, nothing created on
+    any). Only the source (ai_text), the event actor (the person who
+    submitted the capture) and the event details (capture_id) differ. Stock
+    is not deducted and credit is not used: the order desk confirms the
+    order through the existing confirmation workflow.
+
+    Raises everything submit_order() raises. The caller commits.
+    """
+    fingerprint = _capture_fingerprint(capture_id)
+    retailer = _lock_retailer(session, retailer_id)
+
+    existing = _existing_submission(
+        session, retailer.id, client_request_id, fingerprint
+    )
+    if existing is not None:
+        return SubmissionResult(order=existing, created=False)
+
+    order = _create_order(
+        session,
+        retailer,
+        lines,
+        client_request_id=client_request_id,
+        fingerprint=fingerprint,
+        notes=None,
+        now=now or _utcnow(),
+        source=OrderSource.AI_TEXT,
+        actor_user_id=actor_user_id,
+        event_details={"capture_id": str(capture_id)},
     )
     return SubmissionResult(order=order, created=True)
 

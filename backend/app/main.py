@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.request_limits import RequestBodyLimitMiddleware
 from app.api.v1.auth import router as auth_router
+from app.api.v1.captures import router as captures_router
 from app.api.v1.desk_exports import router as desk_exports_router
 from app.api.v1.desk_orders import router as desk_orders_router
 from app.api.v1.retailer_catalogue import router as retailer_catalogue_router
@@ -66,6 +67,7 @@ def create_app(
     application.include_router(retailer_orders_router, prefix=API_V1_PREFIX)
     application.include_router(desk_orders_router, prefix=API_V1_PREFIX)
     application.include_router(desk_exports_router, prefix=API_V1_PREFIX)
+    application.include_router(captures_router, prefix=API_V1_PREFIX)
 
     @application.get("/health")
     def health_check():
