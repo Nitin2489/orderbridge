@@ -9,6 +9,7 @@ Match scores are deterministic heuristic ranking scores (0-100). They are
 not probabilities or confidence percentages.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -151,10 +152,20 @@ class CandidateResponse(BaseModel):
     band: MatchBand
     weak_match: bool = Field(description="True for the weak and very weak bands.")
     reasons: list[str]
+    stock_cases: int | None = Field(
+        default=None,
+        description=(
+            "Current stock in cases, for display (0 when the product is not "
+            "available). Checked again when the order is created and confirmed."
+        ),
+    )
 
     @classmethod
-    def from_candidate(cls, candidate: Candidate) -> "CandidateResponse":
+    def from_candidate(
+        cls, candidate: Candidate, stock: Mapping[UUID, int] | None = None
+    ) -> "CandidateResponse":
         return cls(
+            stock_cases=(stock or {}).get(candidate.product_id),
             product_id=candidate.product_id,
             sku=candidate.sku,
             name=candidate.name,
@@ -273,7 +284,9 @@ class CaptureDetail(BaseModel):
     lines: list[CaptureLineResponse]
 
     @classmethod
-    def from_capture(cls, capture: OrderCapture) -> "CaptureDetail":
+    def from_capture(
+        cls, capture: OrderCapture, stock: Mapping[UUID, int] | None = None
+    ) -> "CaptureDetail":
         data = capture.extracted_data or {}
         notes = {
             entry.get("line_number"): list(entry.get("notes", []))
@@ -296,7 +309,8 @@ class CaptureDetail(BaseModel):
             can_submit=capture.status == CaptureStatus.READY,
             unresolved_lines=_unresolved(capture),
             lines=[
-                _line(line, notes.get(line.line_number, [])) for line in capture.lines
+                _line(line, notes.get(line.line_number, []), stock)
+                for line in capture.lines
             ],
         )
 
@@ -395,7 +409,11 @@ def _interpretation(name: str) -> InterpretationInfo:
     )
 
 
-def _line(line: OrderCaptureLine, notes: list[str]) -> CaptureLineResponse:
+def _line(
+    line: OrderCaptureLine,
+    notes: list[str],
+    stock: Mapping[UUID, int] | None = None,
+) -> CaptureLineResponse:
     candidates = [Candidate.model_validate(entry) for entry in line.candidates or []]
     proposal = next(
         (c for c in candidates if c.product_id == line.proposed_product_id), None
@@ -416,8 +434,12 @@ def _line(line: OrderCaptureLine, notes: list[str]) -> CaptureLineResponse:
         unit_hint=UnitHint(line.unit_hint),
         notes=notes,
         match=LineMatchResponse(
-            proposal=CandidateResponse.from_candidate(proposal) if proposal else None,
-            alternatives=[CandidateResponse.from_candidate(c) for c in others[:2]],
+            proposal=(
+                CandidateResponse.from_candidate(proposal, stock) if proposal else None
+            ),
+            alternatives=[
+                CandidateResponse.from_candidate(c, stock) for c in others[:2]
+            ],
             reasons=list(line.match_reasons or []),
         ),
         unit=UnitDecisionResponse(

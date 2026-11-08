@@ -929,3 +929,28 @@ def submit_capture(
     capture.version += 1
     session.flush()
     return SubmissionOutcome(capture=capture, order=result.order, created=True)
+
+
+def candidate_stock(session: Session, capture: OrderCapture) -> dict[UUID, int]:
+    """Current sellable stock (cases) of every product a capture shows.
+
+    Display only, read at request time: an inactive product counts as 0.
+    Stock is checked again, authoritatively, when the order is created and
+    when the order desk confirms it.
+    """
+    ids: set[UUID] = set()
+    for line in capture.lines:
+        for entry in line.candidates or []:
+            ids.add(UUID(str(entry["product_id"])))
+        if line.selected_product_id is not None:
+            ids.add(line.selected_product_id)
+    if not ids:
+        return {}
+    return {
+        product_id: stock if status == ProductStatus.ACTIVE else 0
+        for product_id, stock, status in session.execute(
+            select(Product.id, Product.stock_quantity, Product.status).where(
+                Product.id.in_(ids)
+            )
+        )
+    }

@@ -275,6 +275,19 @@ def test_create_is_rule_based_and_keeps_the_message(desk, db_session):
     assert changed.status_code == 409
 
 
+def test_candidates_show_current_stock(sharma):
+    lines = create(sharma).json()["lines"]
+
+    stock = {
+        candidate["sku"]: candidate["stock_cases"]
+        for line in lines
+        for candidate in [line["match"]["proposal"], *line["match"]["alternatives"]]
+        if candidate
+    }
+    # The seeded stock: tea is out of stock and stays visible as such.
+    assert stock == {"SKU-BS-075": 340, "SKU-DT-1KG": 85, "SKU-TE-250": 0}
+
+
 @pytest.mark.parametrize("message", ["bhaiya namaste", "   ", ""])
 def test_messages_without_order_lines_are_refused(sharma, db_session, message):
     assert create(sharma, message=message).status_code == 422

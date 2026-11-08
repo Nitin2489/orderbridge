@@ -31,7 +31,7 @@ from app.api.dependencies import (
     require_trusted_origin,
 )
 from app.api.transactions import rollback_after_error
-from app.models import CaptureStatus, UserRole
+from app.models import CaptureStatus, OrderCapture, UserRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.captures import (
     AliasConflictResponse,
@@ -194,6 +194,13 @@ def _error_response(error: Exception) -> JSONResponse | None:
     return None
 
 
+def _detail(db: DbSession, capture: OrderCapture) -> CaptureDetail:
+    """The capture's response, with current stock for its products."""
+    return CaptureDetail.from_capture(
+        capture, capture_service.candidate_stock(db, capture)
+    )
+
+
 def _rolled_back(db: DbSession, error: Exception) -> JSONResponse | None:
     """Roll back, then return the response for a known error (or None, in
     which case the caller re-raises and the request ends as a 500)."""
@@ -247,7 +254,7 @@ def create_capture(
     db.commit()
     if not result.created:
         response.status_code = status.HTTP_200_OK
-    return CaptureDetail.from_capture(result.capture)
+    return _detail(db, result.capture)
 
 
 @router.get(
@@ -303,7 +310,7 @@ def get_capture(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, detail=CAPTURE_NOT_FOUND
         ) from None
-    return CaptureDetail.from_capture(capture)
+    return _detail(db, capture)
 
 
 @router.post(
@@ -352,7 +359,7 @@ def review_line(
             raise
         return failure
     db.commit()
-    return CaptureDetail.from_capture(capture)
+    return _detail(db, capture)
 
 
 @router.post(
@@ -382,7 +389,7 @@ def discard_capture(
             raise
         return failure
     db.commit()
-    return CaptureDetail.from_capture(capture)
+    return _detail(db, capture)
 
 
 @router.post(
@@ -433,5 +440,5 @@ def submit_capture(
         order=CaptureOrderLink(
             id=order.id, order_number=order.order_number, status=order.status
         ),
-        capture=CaptureDetail.from_capture(outcome.capture),
+        capture=_detail(db, outcome.capture),
     )
