@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from app.models.capture import OrderCapture
     from app.models.catalog import Product, Retailer
 from datetime import datetime
 from decimal import Decimal
@@ -26,7 +27,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 from app.models.enums import (
-    CaptureStatus,
     OrderEventType,
     OrderSource,
     OrderStatus,
@@ -229,38 +229,6 @@ class OrderItem(Base):
         UniqueConstraint(
             "order_id", "line_number", name="order_item_line_number_unique"
         ),
-    )
-
-
-class OrderCapture(Base):
-    __tablename__ = "order_captures"
-
-    id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), primary_key=True, default=uuid4
-    )
-    order_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("orders.id", ondelete="SET NULL")
-    )
-    retailer_id: Mapped[UUID] = mapped_column(
-        ForeignKey("retailers.id", ondelete="RESTRICT")
-    )
-    original_message: Mapped[str] = mapped_column(Text)
-    extracted_data: Mapped[dict] = mapped_column(JSON)
-    status: Mapped[CaptureStatus] = mapped_column(
-        String(30), default=CaptureStatus.PROCESSING
-    )
-    review_notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    order: Mapped["Order | None"] = relationship(back_populates="captures")
-    retailer: Mapped["Retailer"] = relationship()
-
-    __table_args__ = (
-        Index("ix_capture_retailer_created", "retailer_id", "created_at"),
-        Index("ix_capture_status_created", "status", "created_at"),
     )
 
 

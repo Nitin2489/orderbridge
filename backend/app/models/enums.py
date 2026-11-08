@@ -41,8 +41,54 @@ class OrderSource(StrEnum):
 
 
 class CaptureStatus(StrEnum):
-    PROCESSING = "processing"
+    """Lifecycle of a captured message (see app.models.capture).
+
+    NEEDS_REVIEW: at least one line is still pending.
+    READY: every line is included or excluded, at least one is included.
+    SUBMITTED: a PENDING_REVIEW order was created from it (terminal). This is
+        not order confirmation: the order desk still confirms the order.
+    DISCARDED: discarded by a reviewer, with a reason (terminal).
+    FAILED: reserved for a future AI provider whose interpretation failed;
+        the rule-based interpreter never sets it.
+    """
+
     NEEDS_REVIEW = "needs_review"
-    READY_FOR_REVIEW = "ready_for_review"
-    CONFIRMED = "confirmed"
+    READY = "ready"
+    SUBMITTED = "submitted"
+    DISCARDED = "discarded"
     FAILED = "failed"
+
+
+class CaptureChannel(StrEnum):
+    """How the message arrived. Photo and voice are pending, not built."""
+
+    TEXT = "text"
+
+
+class CaptureLineResolution(StrEnum):
+    """A reviewer's decision for one captured line."""
+
+    PENDING = "pending"
+    INCLUDED = "included"
+    EXCLUDED = "excluded"
+
+
+class ConfirmedUnit(StrEnum):
+    """The unit a person confirmed for a line's quantity.
+
+    Orders are placed in whole cases: a quantity confirmed in pieces is
+    converted with the selected product's units_per_case, and only when it
+    divides exactly. Nothing is ever confirmed automatically.
+    """
+
+    CASE = "case"
+    PIECE = "piece"
+
+
+class UnitHint(StrEnum):
+    """What the unit word in a line suggests. Only a hint: a person always
+    confirms the quantity in cases."""
+
+    CASE_WORD = "case_word"  # e.g. "peti", "case", "carton"
+    PIECE_WORD = "piece_word"  # e.g. "packet", "piece"
+    NONE = "none"  # no unit word
