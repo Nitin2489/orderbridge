@@ -4,12 +4,17 @@ The web application for OrderBridge: retailer ordering and order-desk operations
 for an FMCG distributor. It talks to the FastAPI backend in `../backend` through
 a same-origin API proxy.
 
-**Status:** application shell, OTP sign-in with role-based workspaces
-(`/sign-in`, `/retailer`, `/desk`), the retailer catalogue at `/retailer`,
-the retailer cart and order submission at `/retailer/cart`, and order
-history, details and repeat ordering at `/retailer/orders`, and the order
-desk queue and order review (confirm or reject) at `/desk`, and the Tally
-CSV export at `/desk/exports`. AI capture is not built yet.
+**Status:** application shell with role-based workspaces and OTP sign-in
+(`/sign-in`). Retailers: catalogue (`/retailer`), cart and order submission
+(`/retailer/cart`), order history, details and repeat ordering
+(`/retailer/orders`) and message capture (`/retailer/capture`). Order desk:
+queue with at-a-glance counts and order review (confirm with credit holds,
+or reject) at `/desk`, message capture review at `/desk/captures`, and the
+Tally CSV export at `/desk/exports`.
+
+Message capture uses deterministic rule-based interpretation and matching
+(not an AI model): a person decides every line and its unit before an order
+is created, and the order desk confirms it as usual.
 
 The Tally export is a generic, line-level CSV sales register, not a verified
 native Tally import: ledgers, GST and voucher types must be mapped in Tally.
@@ -153,7 +158,8 @@ written to `src/components/ui` using the tokens in `src/app/globals.css`.
 ## Design
 
 - Neutral slate surfaces with a single deep teal accent, defined as semantic
-  tokens in `src/app/globals.css` (light theme active; dark tokens prepared).
+  tokens in `src/app/globals.css`, with Light, Dark and System themes
+  (Light by default, applied before first paint).
 - Mobile first: touch targets of at least 44 px, a slide-in navigation panel
   below the `md` breakpoint, and a horizontal navigation bar above it.
 - Accessibility: skip link, visible focus rings, `aria-current` on the active

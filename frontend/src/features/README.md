@@ -30,6 +30,12 @@ Existing modules:
   (`GET /desk/orders/{id}`, `/preview`, `POST .../confirm` and `/reject`).
   Confirmation sends the exact preview fingerprint the desk approved;
   ambiguous or uncertain results re-read the order instead of retrying.
+- `captures/`: message capture for both roles (`/api/v1/captures`, and
+  `GET /desk/retailers` for the desk's retailer picker). The message is kept
+  exactly as received; each line shows its original words, a heuristic match
+  score with reasons (never a probability), the suggested product and up to
+  two alternatives with stock; the unit (cases or pieces) is always asked;
+  aliases are desk-only. Every change names the capture version.
 - `exports/`: Tally CSV export for the order desk (`GET /desk/exports/eligible`,
   `POST /desk/exports`, `GET /desk/exports`, `GET /desk/exports/{id}` and
   `/csv`). An export takes every confirmed order waiting at that moment; the
