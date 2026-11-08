@@ -45,13 +45,23 @@ class OtpVerifyRequest(PhoneNumberRequest):
 class OtpRequestAccepted(BaseModel):
     """Generic response, identical for known and unknown numbers.
 
-    It has no field that could carry a code: codes leave the backend only
-    through app.services.otp_delivery, never in an HTTP response.
+    demo_code is the only way a code can appear in a response, and only for
+    the demonstration accounts listed in AUTH_DEMO_OTP_NUMBERS (empty by
+    default): a reviewer of a deployment without an SMS provider can then
+    sign in to those synthetic accounts. For every other number it is
+    always null, so the response still reveals nothing about accounts.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(examples=[OTP_REQUESTED_MESSAGE])
+    demo_code: str | None = Field(
+        default=None,
+        description=(
+            "Only for numbers in AUTH_DEMO_OTP_NUMBERS (demo accounts), and "
+            "only when a new code was issued; null otherwise."
+        ),
+    )
 
 
 class RetailerProfile(BaseModel):

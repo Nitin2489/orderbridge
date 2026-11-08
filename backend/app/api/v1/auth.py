@@ -69,6 +69,8 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 @router.post(
     "/request-otp",
     response_model=OtpRequestAccepted,
+    # demo_code is omitted unless set, so every other response is unchanged.
+    response_model_exclude_none=True,
     responses=_RATE_LIMITED,
     summary="Request a one-time sign-in code",
     description=(
@@ -77,7 +79,10 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
         "not the number belongs to an account, and never contains the code. "
         "No SMS provider is integrated yet; in local development "
         "(APP_ENV=development, AUTH_DEBUG_OTP=true) the code is printed to "
-        "the backend's terminal. A new code is not issued within the resend "
+        "the backend's terminal. For the demonstration accounts listed in "
+        "AUTH_DEMO_OTP_NUMBERS (empty by default) the new code is also "
+        "returned as demo_code, so a reviewer can sign in without SMS; every "
+        "other number gets null. A new code is not issued within the resend "
         "cooldown or while the number is locked out; the previous code stays "
         "valid during the cooldown."
     ),
@@ -85,6 +90,7 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 def request_otp(
     payload: OtpRequest,
     request: Request,
+    response: Response,
     db: DbSession,
     settings: AppSettings,
     delivery: OtpDeliveryChannel,
@@ -99,7 +105,12 @@ def request_otp(
     if issued is not None:
         delivery.deliver(payload.phone_number, issued.code)
 
-    return OtpRequestAccepted(message=OTP_REQUESTED_MESSAGE)
+    demo_code = None
+    if issued is not None and payload.phone_number in settings.auth_demo_otp_numbers:
+        demo_code = issued.code
+        # The code must not be kept by any cache between here and the browser.
+        response.headers["Cache-Control"] = "no-store"
+    return OtpRequestAccepted(message=OTP_REQUESTED_MESSAGE, demo_code=demo_code)
 
 
 @router.post(

@@ -8,6 +8,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.origins import InvalidOriginError, canonicalize_origin
+from app.core.phone import InvalidPhoneNumberError, normalize_phone_number
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -145,6 +146,10 @@ class Settings(BaseSettings):
     auth_session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     auth_debug_otp: bool = False
     auth_dev_otp_outbox_path: str | None = None
+    # Demonstration accounts whose codes are returned in the request-otp
+    # response, for a reviewed deployment without an SMS provider. Empty by
+    # default; never list a real person's number.
+    auth_demo_otp_numbers: list[str] = Field(default_factory=list)
     frontend_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
@@ -180,6 +185,22 @@ class Settings(BaseSettings):
         # or the password inside DATABASE_URL.
         hide_input_in_errors=True,
     )
+
+    @field_validator("auth_demo_otp_numbers")
+    @classmethod
+    def _normalise_demo_numbers(cls, numbers: list[str]) -> list[str]:
+        """Normalise to +91XXXXXXXXXX and de-duplicate, keeping order."""
+        normalised: list[str] = []
+        for number in numbers:
+            try:
+                phone = normalize_phone_number(number)
+            except InvalidPhoneNumberError:
+                raise ValueError(
+                    f"AUTH_DEMO_OTP_NUMBERS contains an invalid number: {number!r}."
+                ) from None
+            if phone not in normalised:
+                normalised.append(phone)
+        return normalised
 
     @field_validator("frontend_origins")
     @classmethod
