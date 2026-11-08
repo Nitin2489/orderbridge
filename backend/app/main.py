@@ -6,6 +6,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.captures import router as captures_router
 from app.api.v1.desk_exports import router as desk_exports_router
 from app.api.v1.desk_orders import router as desk_orders_router
+from app.api.v1.desk_retailers import router as desk_retailers_router
 from app.api.v1.retailer_catalogue import router as retailer_catalogue_router
 from app.api.v1.retailer_orders import router as retailer_orders_router
 from app.core.config import Settings, get_settings
@@ -67,6 +68,7 @@ def create_app(
     application.include_router(retailer_orders_router, prefix=API_V1_PREFIX)
     application.include_router(desk_orders_router, prefix=API_V1_PREFIX)
     application.include_router(desk_exports_router, prefix=API_V1_PREFIX)
+    application.include_router(desk_retailers_router, prefix=API_V1_PREFIX)
     application.include_router(captures_router, prefix=API_V1_PREFIX)
 
     @application.get("/health")

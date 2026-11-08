@@ -332,3 +332,23 @@ def actor_name(session: Session, user_id: UUID | None) -> str | None:
     if user_id is None:
         return None
     return session.scalar(select(User.full_name).where(User.id == user_id))
+
+
+RETAILER_DIRECTORY_LIMIT = 50
+
+
+def list_retailers(
+    session: Session, *, search: str | None = None, limit: int = 20
+) -> list[Retailer]:
+    """Retailers for the order desk's pickers, by business name.
+
+    Read-only. `search` matches anywhere in the business name, ignoring case;
+    LIKE wildcards in it are treated as plain characters.
+    """
+    statement = select(Retailer).order_by(Retailer.business_name, Retailer.id)
+    if search:
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        statement = statement.where(
+            Retailer.business_name.ilike(f"%{escaped}%", escape="\\")
+        )
+    return list(session.scalars(statement.limit(min(limit, RETAILER_DIRECTORY_LIMIT))))
