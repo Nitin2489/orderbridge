@@ -65,7 +65,7 @@ test.describe("sign-in with a one-time code", () => {
 
     await expect(page).toHaveURL(/\/retailer$/);
     await expect(page.getByRole("heading", { name: "Catalogue" })).toBeVisible();
-    await expect(page.getByText("Sharma General Store")).toBeVisible();
+    await expect(page.locator("#main-content").getByText("Sharma General Store")).toBeVisible();
 
     // The session is an HttpOnly cookie, invisible to page scripts.
     const cookies = await context.cookies();
@@ -76,7 +76,7 @@ test.describe("sign-in with a one-time code", () => {
 
     await page.reload();
     await expect(page.getByRole("heading", { name: "Catalogue" })).toBeVisible();
-    await expect(page.getByText("Sharma General Store")).toBeVisible();
+    await expect(page.locator("#main-content").getByText("Sharma General Store")).toBeVisible();
 
     await page.goto("/desk");
     await expect(
@@ -92,7 +92,7 @@ test.describe("sign-in with a one-time code", () => {
     await page.goto("/sign-in");
     await expect(page).toHaveURL(/\/retailer$/);
 
-    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.getByRole("button", { name: "Sign out" }).first().click();
     await expect(page).toHaveURL(/\/sign-in$/);
 
     const me = await page.request.get("/api/v1/auth/me");
@@ -145,7 +145,7 @@ test.describe("sign-in with a one-time code", () => {
     expect(eligible.status()).toBe(200);
 
     // End the session so no desk session outlives the test.
-    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.getByRole("button", { name: "Sign out" }).first().click();
     await expect(page).toHaveURL(/\/sign-in$/);
     expect((await page.request.get("/api/v1/auth/me")).status()).toBe(401);
   });
@@ -168,9 +168,9 @@ test.describe("sign-in with a one-time code", () => {
     await enterCode(page, code);
 
     await expect(page).toHaveURL(/\/retailer$/);
-    await expect(page.getByText("Patel Provision Store")).toBeVisible();
+    await expect(page.locator("#main-content").getByText("Patel Provision Store")).toBeVisible();
 
-    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.getByRole("button", { name: "Sign out" }).first().click();
     await expect(page).toHaveURL(/\/sign-in$/);
   });
 });
