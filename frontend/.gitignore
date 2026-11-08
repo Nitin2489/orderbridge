@@ -1,0 +1,10 @@
+# Frontend-specific ignores (node_modules/, .next/, out/ and .env.* are
+# already ignored by the repository root .gitignore).
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
+
+# Playwright output
+test-results/
+playwright-report/
+blob-report/
