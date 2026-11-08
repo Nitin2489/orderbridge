@@ -43,3 +43,6 @@ build/
 # Operating system
 .DS_Store
 Thumbs.db
+
+# Private local assistant instructions (not published)
+CLAUDE.md
