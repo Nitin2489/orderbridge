@@ -8,7 +8,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SignOutButton } from "@/features/auth/components/sign-out-button";
 import { useSession } from "@/features/auth/session-provider";
 import { formatCount, formatRupees } from "@/features/catalogue/format";
 
@@ -186,7 +185,6 @@ function ExportWorkspace({ sessionUserId }: { sessionUserId: string }) {
             <CsvNotice />
           </div>
         </div>
-        <SignOutButton />
       </div>
 
       <section

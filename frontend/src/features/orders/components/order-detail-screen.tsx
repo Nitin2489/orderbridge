@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Figure, Figures } from "@/components/ui/figures";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 import { OrderConfirmation } from "@/features/cart/components/order-confirmation";
@@ -84,14 +85,14 @@ function LineRow({ line }: { line: OrderLine }) {
           <p className="mt-1 text-sm text-accent-foreground">Scheme: {line.scheme_name}</p>
         ) : null}
       </div>
-      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm sm:max-w-sm">
-        {/* The API gives no unit for order lines, so quantities stay neutral. */}
-        <Amount label="Quantity" value={formatCount(line.quantity)} />
-        <Amount label="Free quantity" value={formatCount(line.free_quantity)} />
-        <Amount label="Unit price" value={formatRupees(line.unit_price)} />
-        <Amount label="Discount" value={formatRupees(line.discount_amount)} />
-        <Amount label="Line total" value={formatRupees(line.line_total)} />
-      </dl>
+      {/* The API gives no unit for order lines, so quantities stay neutral. */}
+      <Figures columns={5}>
+        <Figure label="Quantity">{formatCount(line.quantity)}</Figure>
+        <Figure label="Free quantity">{formatCount(line.free_quantity)}</Figure>
+        <Figure label="Unit price">{formatRupees(line.unit_price)}</Figure>
+        <Figure label="Discount">{formatRupees(line.discount_amount)}</Figure>
+        <Figure label="Line total">{formatRupees(line.line_total)}</Figure>
+      </Figures>
     </li>
   );
 }
@@ -116,7 +117,6 @@ function OrderDetail({
             { label: order.order_number, current: true },
           ]}
         />
-        <BackToOrders />
       </div>
 
       <div className="flex flex-col gap-2">

@@ -6,7 +6,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { SignOutButton } from "@/features/auth/components/sign-out-button";
 import { useSession } from "@/features/auth/session-provider";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
@@ -159,7 +158,6 @@ export function CatalogueScreen() {
             Your prices and current schemes. Prices exclude GST.
           </p>
         </div>
-        <SignOutButton />
       </div>
 
       <CatalogueFilters

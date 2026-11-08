@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { QueueScreen } from "@/features/desk/components/queue-screen";
+import { DeskHome } from "@/features/desk/components/desk-home";
 
 export const metadata: Metadata = {
   title: "Order queue",
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function DeskPage() {
-  return <QueueScreen />;
+  return <DeskHome />;
 }

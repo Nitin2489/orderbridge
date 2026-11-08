@@ -11,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { SignOutButton } from "@/features/auth/components/sign-out-button";
 import { formatCount, formatIndiaDate, formatRupees } from "@/features/catalogue/format";
 import { OrderStatusBadge } from "@/features/orders/components/order-status-badge";
 import {
@@ -130,9 +129,24 @@ function QueueSkeleton() {
   );
 }
 
-/** /desk: the order queue across retailers. Defaults to orders awaiting review. */
-export function QueueScreen() {
-  const [status, setStatus] = useState<OrderStatus | null>("pending_review");
+/**
+ * /desk: the order queue across retailers. Defaults to orders awaiting
+ * review. The status filter can be controlled by a parent (the desk's
+ * summary tiles set it); otherwise the screen keeps its own.
+ */
+export function QueueScreen({
+  status: controlledStatus,
+  onStatusChange,
+  summary,
+}: {
+  status?: OrderStatus | null;
+  onStatusChange?: (status: OrderStatus | null) => void;
+  /** Shown under the page header (the desk's summary tiles). */
+  summary?: ReactNode;
+} = {}) {
+  const [ownStatus, setOwnStatus] = useState<OrderStatus | null>("pending_review");
+  const status = controlledStatus !== undefined ? controlledStatus : ownStatus;
+  const setStatus = onStatusChange ?? setOwnStatus;
   const [searchInput, setSearchInput] = useState("");
   const [retailer, setRetailer] = useState<RetailerFilter | null>(null);
   const [fromDate, setFromDate] = useState("");
@@ -274,8 +288,9 @@ export function QueueScreen() {
             unconfirmed orders are the prices at submission.
           </p>
         </div>
-        <SignOutButton />
       </div>
+
+      {summary}
 
       <div className="flex flex-col gap-4">
         <div

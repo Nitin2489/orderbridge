@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Figure, Figures } from "@/components/ui/figures";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { formatCount, formatRupees } from "@/features/catalogue/format";
@@ -27,7 +28,10 @@ function Change({ stored, current }: { stored: string; current: string }) {
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+const Row = Figure;
+
+/** A totals row: label left, amount right (kept as a summary list). */
+function TotalRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="contents">
       <dt className="text-muted-foreground">{label}</dt>
@@ -52,7 +56,14 @@ function PreviewLineRow({ line }: { line: PreviewLine }) {
         <span className="sr-only">SKU </span>
         {line.sku}
       </p>
-      <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm sm:max-w-md">
+      <p className="text-sm">
+        <span className="text-muted-foreground">Scheme: </span>
+        <Change
+          stored={line.stored_scheme_name ?? "None"}
+          current={line.current_scheme_name ?? "None"}
+        />
+      </p>
+      <Figures columns={6}>
         <Row label="Quantity">{formatCount(line.quantity)}</Row>
         <Row label="Free quantity">
           <Change
@@ -79,13 +90,7 @@ function PreviewLineRow({ line }: { line: PreviewLine }) {
             current={formatRupees(line.current_line_total)}
           />
         </Row>
-        <Row label="Scheme">
-          <Change
-            stored={line.stored_scheme_name ?? "None"}
-            current={line.current_scheme_name ?? "None"}
-          />
-        </Row>
-      </dl>
+      </Figures>
     </li>
   );
 }
@@ -187,13 +192,15 @@ export function PreviewPanel({ preview, isPending, isFetching, error, onRefresh 
           </ul>
 
           <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 border-t pt-3 text-sm">
-            <Row label="Subtotal">{formatRupees(preview.subtotal)}</Row>
-            <Row label="Discount total">{formatRupees(preview.discount_total)}</Row>
+            <TotalRow label="Subtotal">{formatRupees(preview.subtotal)}</TotalRow>
+            <TotalRow label="Discount total">{formatRupees(preview.discount_total)}</TotalRow>
             <div className="contents font-semibold">
               <dt>{preview.totals_cover_all_lines ? "Grand total" : "Partial total"}</dt>
               <dd className="text-right tabular-nums">{formatRupees(preview.grand_total)}</dd>
             </div>
-            <Row label="Available credit">{formatRupees(preview.available_credit)}</Row>
+            <TotalRow label="Available credit">
+              {formatRupees(preview.available_credit)}
+            </TotalRow>
           </dl>
           {!preview.totals_cover_all_lines ? (
             <p className="text-xs text-muted-foreground">

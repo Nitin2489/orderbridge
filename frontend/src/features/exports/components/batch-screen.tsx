@@ -71,7 +71,6 @@ function BatchDetail({ batch }: { batch: ExportBatchDetail }) {
             { label: batch.batch_number, current: true },
           ]}
         />
-        <BackToExports />
       </div>
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">

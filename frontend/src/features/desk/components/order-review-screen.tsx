@@ -12,6 +12,7 @@ import { useRef, useState, type ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Figure, Figures } from "@/components/ui/figures";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 import { useSession } from "@/features/auth/session-provider";
@@ -192,13 +193,13 @@ function SubmittedLines({ items }: { items: readonly OrderLine[] }) {
               </p>
               {line.scheme_name ? <p className="mt-1 text-sm">Scheme: {line.scheme_name}</p> : null}
             </div>
-            <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm sm:max-w-sm">
-              <Amount label="Quantity">{formatCount(line.quantity)}</Amount>
-              <Amount label="Free quantity">{formatCount(line.free_quantity)}</Amount>
-              <Amount label="Unit price">{formatRupees(line.unit_price)}</Amount>
-              <Amount label="Discount">{formatRupees(line.discount_amount)}</Amount>
-              <Amount label="Line total">{formatRupees(line.line_total)}</Amount>
-            </dl>
+            <Figures columns={5}>
+              <Figure label="Quantity">{formatCount(line.quantity)}</Figure>
+              <Figure label="Free quantity">{formatCount(line.free_quantity)}</Figure>
+              <Figure label="Unit price">{formatRupees(line.unit_price)}</Figure>
+              <Figure label="Discount">{formatRupees(line.discount_amount)}</Figure>
+              <Figure label="Line total">{formatRupees(line.line_total)}</Figure>
+            </Figures>
           </li>
         ))}
       </ul>
@@ -221,11 +222,11 @@ function CreditPanel({ order }: { order: DeskOrderDetail }) {
           This retailer account is inactive. Its orders cannot be confirmed, only rejected.
         </p>
       ) : null}
-      <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 text-sm sm:max-w-sm">
-        <Amount label="Credit limit">{formatRupees(retailer.credit_limit)}</Amount>
-        <Amount label="Outstanding balance">{formatRupees(retailer.outstanding_balance)}</Amount>
-        <Amount label="Available credit">{formatRupees(retailer.available_credit)}</Amount>
-      </dl>
+      <Figures columns={3} className="mt-3">
+        <Figure label="Credit limit">{formatRupees(retailer.credit_limit)}</Figure>
+        <Figure label="Outstanding balance">{formatRupees(retailer.outstanding_balance)}</Figure>
+        <Figure label="Available credit">{formatRupees(retailer.available_credit)}</Figure>
+      </Figures>
     </section>
   );
 }
@@ -343,7 +344,6 @@ function OrderReview({ order, sessionUserId }: { order: DeskOrderDetail; session
             { label: order.order_number, current: true },
           ]}
         />
-        <BackToQueue />
       </div>
 
       <div className="flex flex-col gap-2">
