@@ -1,3 +1,4 @@
+import hmac
 import ipaddress
 import secrets
 from functools import lru_cache
@@ -7,6 +8,7 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.demo_accounts import DEMO_ACCOUNT_NUMBERS
 from app.core.origins import InvalidOriginError, canonicalize_origin
 from app.core.phone import InvalidPhoneNumberError, normalize_phone_number
 
@@ -97,6 +99,15 @@ class Settings(BaseSettings):
       end-to-end tests on the same machine can read it from disk. Only
       allowed with APP_ENV=development and AUTH_DEBUG_OTP=true. A relative
       path is resolved against the repository root; the directory must exist.
+    - AUTH_DEMO_OTP_NUMBERS, AUTH_DEMO_ACCESS_KEY: reviewer access for a
+      deployment without an SMS provider (app.services.demo_access). Empty
+      by default. AUTH_DEMO_OTP_NUMBERS may list only the pre-provisioned
+      synthetic accounts (app.core.demo_accounts). Whenever it lists any,
+      AUTH_DEMO_ACCESS_KEY is required in every environment: at least 32
+      random characters, not a placeholder and not AUTH_SECRET_KEY. Only a
+      browser that has unlocked reviewer access with that key sees the
+      codes of those numbers, and only such a browser can request or
+      verify codes for them.
     - FRONTEND_ORIGINS: JSON list of trusted frontend origins, used for CORS
       and for the CSRF origin check. Canonicalised and de-duplicated. Must be
       https in production.
@@ -147,9 +158,12 @@ class Settings(BaseSettings):
     auth_debug_otp: bool = False
     auth_dev_otp_outbox_path: str | None = None
     # Demonstration accounts whose codes are returned in the request-otp
-    # response, for a reviewed deployment without an SMS provider. Empty by
-    # default; never list a real person's number.
+    # response to a browser with reviewer access, for a reviewed deployment
+    # without an SMS provider. Empty by default; limited to the synthetic
+    # accounts in app.core.demo_accounts.
     auth_demo_otp_numbers: list[str] = Field(default_factory=list)
+    # The private reviewer access key. Never commit, log or return it.
+    auth_demo_access_key: SecretStr | None = None
     frontend_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
@@ -198,9 +212,22 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"AUTH_DEMO_OTP_NUMBERS contains an invalid number: {number!r}."
                 ) from None
+            if phone not in DEMO_ACCOUNT_NUMBERS:
+                raise ValueError(
+                    "AUTH_DEMO_OTP_NUMBERS may list only the pre-provisioned "
+                    f"demonstration accounts; {phone} is not one of them."
+                )
             if phone not in normalised:
                 normalised.append(phone)
         return normalised
+
+    @field_validator("auth_demo_access_key", mode="before")
+    @classmethod
+    def _blank_access_key_is_unset(cls, value: object) -> object:
+        """An empty AUTH_DEMO_ACCESS_KEY= line means "not configured"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("frontend_origins")
     @classmethod
@@ -275,6 +302,7 @@ class Settings(BaseSettings):
         self._check_dev_otp_outbox()
 
         secret = self.auth_secret_key.get_secret_value() if self.auth_secret_key else ""
+        self._check_demo_access(secret)
         deployed = self.app_env in ("staging", "production")
 
         if deployed:
@@ -310,6 +338,42 @@ class Settings(BaseSettings):
             self.auth_secret_key = SecretStr(secrets.token_urlsafe(32))
 
         return self
+
+    def _check_demo_access(self, secret: str) -> None:
+        """Demo numbers need a strong, separate reviewer access key.
+
+        Applies in every environment, so a deployment can never return demo
+        codes to a browser that has not unlocked reviewer access. Messages
+        never contain the key.
+        """
+        if not self.auth_demo_otp_numbers:
+            return
+
+        key = (
+            self.auth_demo_access_key.get_secret_value()
+            if self.auth_demo_access_key
+            else ""
+        )
+        if not key:
+            raise ValueError(
+                "AUTH_DEMO_OTP_NUMBERS is set, so AUTH_DEMO_ACCESS_KEY must be "
+                "set to a private random value of at least "
+                f"{MIN_PRODUCTION_SECRET_LENGTH} characters."
+            )
+        if len(key) < MIN_PRODUCTION_SECRET_LENGTH:
+            raise ValueError(
+                "AUTH_DEMO_ACCESS_KEY must be at least "
+                f"{MIN_PRODUCTION_SECRET_LENGTH} characters."
+            )
+        if secret_looks_like_placeholder(key):
+            raise ValueError(
+                "AUTH_DEMO_ACCESS_KEY looks like a placeholder or patterned "
+                "value; generate a random one."
+            )
+        if secret and hmac.compare_digest(key.encode(), secret.encode()):
+            raise ValueError(
+                "AUTH_DEMO_ACCESS_KEY must be different from AUTH_SECRET_KEY."
+            )
 
     @field_validator("auth_dev_otp_outbox_path")
     @classmethod

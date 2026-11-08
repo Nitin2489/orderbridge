@@ -54,7 +54,7 @@ Statuses: **Implemented**, **In progress**, **Partial**, **Pending**,
 
 | Requirement | Status |
 |---|---|
-| OTP login | Implemented |
+| OTP login | Implemented (no SMS provider; the review deployment shows the four demo accounts' codes only after reviewer access is unlocked with a private key) |
 | Installable web app | Pending |
 | Stock status | Implemented (catalogue) |
 | Repeat order | Implemented |

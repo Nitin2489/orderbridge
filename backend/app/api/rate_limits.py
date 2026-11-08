@@ -28,11 +28,29 @@ logger = logging.getLogger(__name__)
 
 OtpAction = Literal["request", "verify"]
 
+# Reviewer access unlock (POST /auth/demo-access): every attempt counts, so
+# failed guesses are limited per client IP. The key itself (32+ random
+# characters) is what makes guessing infeasible; this bounds the noise.
+DEMO_ACCESS_UNLOCK_RULE = RateLimitRule(
+    name="demo_access_unlock:ip", limit=10, window_seconds=15 * 60
+)
+
+# Suffix of the per-number bucket used for requests about a listed demo
+# number from a browser without reviewer access. Those requests never issue
+# or check a code, and counting them separately means an outsider cannot
+# use up the reviewer's own per-number allowance.
+DEMO_UNAUTHORIZED_SUFFIX = ":demo-unauthorized"
+
 
 def otp_rate_limit_rules(
-    settings: Settings, action: OtpAction
+    settings: Settings, action: OtpAction, *, demo_unauthorized: bool = False
 ) -> tuple[RateLimitRule, RateLimitRule]:
-    """(per-IP rule, per-phone rule) for an OTP endpoint."""
+    """(per-IP rule, per-phone rule) for an OTP endpoint.
+
+    demo_unauthorized selects the separate per-number bucket described at
+    DEMO_UNAUTHORIZED_SUFFIX; the limits and the per-IP rule are the same.
+    """
+    suffix = DEMO_UNAUTHORIZED_SUFFIX if demo_unauthorized else ""
     if action == "request":
         return (
             RateLimitRule(
@@ -41,7 +59,7 @@ def otp_rate_limit_rules(
                 window_seconds=settings.rate_limit_otp_request_ip_window_seconds,
             ),
             RateLimitRule(
-                name="otp_request:phone",
+                name=f"otp_request:phone{suffix}",
                 limit=settings.rate_limit_otp_request_phone_limit,
                 window_seconds=settings.rate_limit_otp_request_phone_window_seconds,
             ),
@@ -53,7 +71,7 @@ def otp_rate_limit_rules(
             window_seconds=settings.rate_limit_otp_verify_ip_window_seconds,
         ),
         RateLimitRule(
-            name="otp_verify:phone",
+            name=f"otp_verify:phone{suffix}",
             limit=settings.rate_limit_otp_verify_phone_limit,
             window_seconds=settings.rate_limit_otp_verify_phone_window_seconds,
         ),
@@ -67,6 +85,7 @@ def enforce_otp_rate_limits(
     *,
     action: OtpAction,
     phone_number: str,
+    demo_unauthorized: bool = False,
     now: datetime | None = None,
 ) -> None:
     """Count this request; raise 429 (with Retry-After) if a limit is exceeded.
@@ -90,7 +109,9 @@ def enforce_otp_rate_limits(
     loaded objects expired.
     """
     now = now or datetime.now(UTC)
-    ip_rule, phone_rule = otp_rate_limit_rules(settings, action)
+    ip_rule, phone_rule = otp_rate_limit_rules(
+        settings, action, demo_unauthorized=demo_unauthorized
+    )
     secret = settings.auth_secret
 
     result = rate_limit.hit(
@@ -104,6 +125,38 @@ def enforce_otp_rate_limits(
         result = rate_limit.hit(db, phone_rule, phone_number, secret=secret, now=now)
 
     # The decision is final once the counts are committed.
+    db.commit()
+
+    _clean_up_expired_counters(db, settings, now=now)
+
+    if not result.allowed:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(result.retry_after_seconds)},
+        )
+
+
+def enforce_demo_access_rate_limit(
+    db: Session,
+    request: Request,
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Count one reviewer access unlock attempt for the client IP; 429 if over.
+
+    Same transaction contract as enforce_otp_rate_limits: the endpoint's
+    first database operation, committing its own counter.
+    """
+    now = now or datetime.now(UTC)
+    result = rate_limit.hit(
+        db,
+        DEMO_ACCESS_UNLOCK_RULE,
+        client_ip(request, settings.trusted_proxy_networks),
+        secret=settings.auth_secret,
+        now=now,
+    )
     db.commit()
 
     _clean_up_expired_counters(db, settings, now=now)

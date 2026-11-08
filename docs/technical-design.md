@@ -202,10 +202,36 @@ For the brief's sample message the result is:
   failures a day), and per-IP and per-number rate limits (429 with
   Retry-After). Sessions are random tokens stored hashed, in an HttpOnly,
   SameSite cookie, Secure in production.
-- **[Assumption]** No SMS provider is available for the review. On the review
-  deployment, only the four listed demo accounts see their freshly issued code
-  on the sign-in page (`AUTH_DEMO_OTP_NUMBERS`); every rule above still
-  applies, and other numbers get nothing. Production needs an SMS provider.
+- **[Assumption]** No SMS provider is available for the review. Because the
+  four demo numbers are published, their codes are protected by a separate
+  private reviewer access key (`AUTH_DEMO_ACCESS_KEY`), held only in the
+  host's secret settings and given to the evaluator privately:
+  - The evaluator enters the key once under "Reviewer access" on the sign-in
+    page. It is compared in constant time, attempts are rate-limited per IP,
+    and the request must come from the trusted origin.
+  - Success sets an HttpOnly, SameSite=Lax cookie (Secure in production)
+    holding a signed token that expires after 8 hours. It contains neither
+    secret, grants no session or role, and stops working when the key is
+    rotated.
+  - With that cookie, the code step shows the freshly issued code of a demo
+    account. Roles still come only from the account; every OTP rule above
+    still applies.
+  - Without it, requests for the demo numbers neither issue, invalidate nor
+    check a code, and are counted in a separate rate-limit bucket, so
+    outsiders cannot take over the accounts, expire the evaluator's code or
+    lock the accounts.
+  - The backend refuses to start if the list names any number other than the
+    four synthetic accounts, or names any without a strong key. Production
+    needs an SMS provider and an empty list.
+- **Client IP behind the proxies (known limitation).** Requests pass through
+  Vercel and Render's own proxy. `TRUSTED_PROXY_CIDRS` is left empty on
+  purpose: the proxies' handling of `X-Forwarded-For` is unverified, and
+  Vercel's outgoing addresses are not published, so trusting them would let a
+  direct caller forge a client address. Forwarded headers are therefore
+  ignored and cannot be spoofed, but all visitors share the per-IP rate
+  limits of the proxy address. A noisy client can delay others (for example
+  the reviewer access unlock, 10 attempts per 15 minutes) but never gain
+  access: per-number limits, lockout and the key still apply.
 - Authorisation on every route from the session only: retailers see only
   their own prices, orders and captures (another retailer's is a 404); desk
   routes require the desk role. State-changing requests require a trusted
@@ -281,10 +307,13 @@ listed in section 10.
 3. Salesman mode with offline ordering and sync.
 4. SMS provider integration; credit-hold release; van loading lists; the
    inactive retailer dashboard.
-5. Performance: smaller first load (fewer client components on the sign-in
+5. Authenticated proxy forwarding, so per-IP limits apply per real client:
+   the Next.js server passes Vercel's client IP with a shared secret that
+   the backend checks in constant time.
+6. Performance: smaller first load (fewer client components on the sign-in
    page, a system font on slow networks) to bring the full load under 3
    seconds on slow 3G.
-6. Product import for the full catalogue (CSV upload validated per row).
+7. Product import for the full catalogue (CSV upload validated per row).
 
 ## 11. Labelled assumptions (summary)
 

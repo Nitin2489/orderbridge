@@ -31,8 +31,9 @@ export const authenticatedUserSchema = z.object({
  * OtpRequestAccepted: a generic message. Codes are delivered by the backend
  * (SMS, or the development console and outbox). The one exception is
  * demo_code, present only for the demonstration accounts a deployment lists
- * in AUTH_DEMO_OTP_NUMBERS (a reviewed deployment without SMS). z.object
- * strips any other key, so nothing else code-like reaches the UI.
+ * in AUTH_DEMO_OTP_NUMBERS, and only for a browser that has unlocked
+ * reviewer access (a reviewed deployment without SMS). z.object strips any
+ * other key, so nothing else code-like reaches the UI.
  */
 export const otpRequestAcceptedSchema = z.object({
   message: z.string(),
@@ -44,6 +45,17 @@ export const otpRequestAcceptedSchema = z.object({
     .catch(undefined),
 });
 
+/**
+ * GET /auth/demo-access: whether this deployment offers reviewer access to
+ * the demonstration accounts, and whether this browser has unlocked it. The
+ * access key and the access cookie never reach JavaScript.
+ */
+export const demoAccessStatusSchema = z.object({
+  enabled: z.boolean(),
+  active: z.boolean(),
+});
+
+export type DemoAccessStatus = z.infer<typeof demoAccessStatusSchema>;
 export type RetailerProfile = z.infer<typeof retailerProfileSchema>;
 export type AuthenticatedUser = z.infer<typeof authenticatedUserSchema>;
 export type OtpRequestAccepted = z.infer<typeof otpRequestAcceptedSchema>;

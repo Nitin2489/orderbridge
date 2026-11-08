@@ -9,6 +9,7 @@ import { formatPhoneNumber, nationalNumber } from "../schemas";
 import { AuthLayout } from "./auth-layout";
 import { CodeForm } from "./code-form";
 import { PhoneForm } from "./phone-form";
+import { ReviewerAccess } from "./reviewer-access";
 
 /**
  * Mirrors the backend's AUTH_OTP_RESEND_COOLDOWN_SECONDS default. The
@@ -21,7 +22,7 @@ export const RESEND_COOLDOWN_SECONDS = 60;
 interface IssuedCode {
   /** When the current code was requested (epoch milliseconds). */
   at: number;
-  /** The code itself, only for a listed demonstration account. */
+  /** The code itself, only for a listed demo account with reviewer access. */
   demoCode?: string;
 }
 
@@ -145,6 +146,7 @@ export function SignInFlow() {
         retryAt={retryAt}
         onSubmit={(target) => sendCode(target, false)}
       />
+      <ReviewerAccess />
     </AuthLayout>
   );
 }

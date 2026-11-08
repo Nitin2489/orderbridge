@@ -13,8 +13,10 @@ import { api, isApiError } from "@/lib/api";
 import { SIGN_IN_PATH } from "./roles";
 import {
   authenticatedUserSchema,
+  demoAccessStatusSchema,
   otpRequestAcceptedSchema,
   type AuthenticatedUser,
+  type DemoAccessStatus,
   type OtpRequestAccepted,
 } from "./types";
 
@@ -76,6 +78,24 @@ export async function fetchSession(signal?: AbortSignal): Promise<AuthenticatedU
   }
 }
 
+/** Reviewer access to the demonstration accounts (see DemoAccessStatus). */
+export const DEMO_ACCESS_QUERY_KEY = [AUTH_KEY_PREFIX, "demo-access"] as const;
+
+export async function fetchDemoAccess(signal?: AbortSignal): Promise<DemoAccessStatus> {
+  const data = await api.get<unknown>("/auth/demo-access", { signal });
+  return parseResponse(demoAccessStatusSchema, data);
+}
+
+/**
+ * Send the reviewer access key once. On success the backend sets an
+ * HttpOnly cookie. Deliberately not a TanStack mutation: a mutation keeps
+ * its variables (here, the key) in the cache, and the key must not be kept
+ * anywhere in the client.
+ */
+export async function unlockDemoAccess(accessKey: string): Promise<void> {
+  await api.post<void>("/auth/demo-access", { access_key: accessKey });
+}
+
 export async function logout(): Promise<void> {
   await api.post<void>("/auth/logout");
 }
@@ -127,6 +147,15 @@ export function useRequestOtp() {
   return useMutation({
     mutationKey: [AUTH_KEY_PREFIX, "request-otp"],
     mutationFn: requestOtp,
+  });
+}
+
+export function useDemoAccess() {
+  return useQuery({
+    queryKey: DEMO_ACCESS_QUERY_KEY,
+    queryFn: ({ signal }) => fetchDemoAccess(signal),
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
 

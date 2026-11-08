@@ -45,11 +45,12 @@ class OtpVerifyRequest(PhoneNumberRequest):
 class OtpRequestAccepted(BaseModel):
     """Generic response, identical for known and unknown numbers.
 
-    demo_code is the only way a code can appear in a response, and only for
+    demo_code is the only way a code can appear in a response: only for
     the demonstration accounts listed in AUTH_DEMO_OTP_NUMBERS (empty by
-    default): a reviewer of a deployment without an SMS provider can then
-    sign in to those synthetic accounts. For every other number it is
-    always null, so the response still reveals nothing about accounts.
+    default), and only to a browser that has unlocked reviewer access with
+    the private AUTH_DEMO_ACCESS_KEY. A reviewer of a deployment without an
+    SMS provider can then sign in to those synthetic accounts. In every
+    other case it is null, so the response reveals nothing about accounts.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -58,9 +59,27 @@ class OtpRequestAccepted(BaseModel):
     demo_code: str | None = Field(
         default=None,
         description=(
-            "Only for numbers in AUTH_DEMO_OTP_NUMBERS (demo accounts), and "
-            "only when a new code was issued; null otherwise."
+            "Only for numbers in AUTH_DEMO_OTP_NUMBERS (demo accounts), only "
+            "for a browser with reviewer access, and only when a new code was "
+            "issued; null otherwise."
         ),
+    )
+
+
+DEMO_ACCESS_DENIED_MESSAGE = "The reviewer access key is not valid."
+
+
+class DemoAccessStatus(BaseModel):
+    """Whether reviewer access exists here and whether this browser has it.
+
+    Never contains the access key or the access token.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(description="True when this deployment offers demo accounts.")
+    active: bool = Field(
+        description="True when this browser has unlocked reviewer access."
     )
 
 

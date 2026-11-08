@@ -47,4 +47,7 @@ cd ../frontend && npm ci && npm run dev
 ```
 
 Sign in at http://localhost:3000 as retailer 9000000001 or the order desk
-9000000010; in development the code is printed in the backend terminal.
+9000000010; in development the code is printed in the backend terminal. On
+the review deployment, which has no SMS provider, the codes of the four demo
+accounts are shown only after **Reviewer access** is unlocked with a private
+key (`AUTH_DEMO_ACCESS_KEY`); see `deployment.md`.

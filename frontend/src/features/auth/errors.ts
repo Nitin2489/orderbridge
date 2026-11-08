@@ -77,3 +77,21 @@ export function sessionErrorMessage(error: unknown): string {
   }
   return "We could not check your session.";
 }
+
+export function unlockDemoAccessErrorMessage(error: unknown): string {
+  if (!isApiError(error)) {
+    return FALLBACK;
+  }
+  switch (error.status) {
+    case 401:
+      return "That reviewer access key is not valid.";
+    case 403:
+      return "The request was blocked by a security check. Reload the page and try again.";
+    case 404:
+      return "Reviewer access is not offered on this deployment.";
+    case 429:
+      return tooManyAttemptsMessage(error);
+    default:
+      return error.status === 0 || error.status >= 500 ? error.message : FALLBACK;
+  }
+}

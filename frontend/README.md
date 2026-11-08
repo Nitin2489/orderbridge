@@ -128,6 +128,13 @@ Browser ──/api/v1/...──▶ Next.js (same origin) ──rewrite──▶ 
 Demo accounts (seeded by the backend): retailers `9000000001`, `9000000002`,
 `9000000003`; order desk `9000000010`.
 
+Reviewer access (`features/auth/components/reviewer-access.tsx`): when the
+backend offers it (`GET /auth/demo-access`), the number step shows a
+collapsed "Reviewer access" panel. The evaluator enters the private key once;
+it is posted to `POST /auth/demo-access`, the field is cleared, and the key is
+never kept in state, the query cache, storage or a URL. The backend's
+HttpOnly cookie then lets the code step show a demo account's code.
+
 ## Project structure
 
 ```

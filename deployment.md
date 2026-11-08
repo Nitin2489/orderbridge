@@ -120,12 +120,33 @@ Production settings: `APP_ENV=production` (API docs are then disabled),
 to start with unsafe production settings (for example a placeholder secret or
 an http origin).
 
-**Sign-in without SMS.** No SMS provider is integrated. For the review
-deployment, set `AUTH_DEMO_OTP_NUMBERS` to the four demo numbers: for those
-accounts only, the sign-in page then shows the freshly issued code with a
-"Demo account" label. Codes stay random, single use, expiring, rate-limited
-and subject to lockout; any other number receives no code. A real deployment
-needs an SMS provider and an empty `AUTH_DEMO_OTP_NUMBERS`.
+**Sign-in without SMS (reviewer access).** No SMS provider is integrated.
+The demo numbers are public, so their codes are protected by a separate
+private key:
+
+1. Generate a key: `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+2. In the backend host's secret environment settings (never in the
+   repository), set `AUTH_DEMO_ACCESS_KEY` to it and `AUTH_DEMO_OTP_NUMBERS`
+   to `["9000000001","9000000002","9000000003","9000000010"]`.
+3. Give the key to the evaluator privately (in the submitted copy of this
+   file only).
+
+On the sign-in page the evaluator opens **Reviewer access** and enters the
+key once. The backend compares it in constant time, rate-limits attempts and
+sets an HttpOnly cookie (Secure, SameSite=Lax, 8 hours) that grants no
+session or role. With that cookie, the code step shows the freshly issued
+code for a demo account. Codes stay random, single use, expiring,
+rate-limited and subject to lockout. A browser without reviewer access can
+neither receive, issue nor verify codes for the demo numbers (so it cannot
+expire the evaluator's code or lock the account), and every other number
+behaves normally.
+
+The backend refuses to start if `AUTH_DEMO_OTP_NUMBERS` lists any number
+other than these four, or lists any without a strong `AUTH_DEMO_ACCESS_KEY`
+(at least 32 characters, not a placeholder, different from
+`AUTH_SECRET_KEY`). Rotating the key ends every reviewer access cookie. After
+the review, empty `AUTH_DEMO_OTP_NUMBERS`; a real deployment needs an SMS
+provider.
 
 ## 4. Demo logins
 
@@ -137,8 +158,12 @@ needs an SMS provider and an empty `AUTH_DEMO_OTP_NUMBERS`.
 | Order desk | 9000000010 | Order Desk Operator |
 
 All four are synthetic accounts from `seed.py`. Locally the code is in the
-backend terminal and the outbox file; on the review deployment it is shown on
-the sign-in page for these numbers.
+backend terminal and the outbox file. On the review deployment, first open
+**Reviewer access** on the sign-in page and enter the reviewer access key;
+the code is then shown on the code step for these numbers.
+
+**Reviewer access key:** _supplied only in the copy of this file inside the
+submission ZIP; never in the public repository._
 
 ### A short walkthrough
 
@@ -167,6 +192,7 @@ Compose only), `AUTH_SECRET_KEY`, `AUTH_OTP_TTL_SECONDS`,
 `AUTH_SESSION_TTL_SECONDS`, `AUTH_SESSION_COOKIE_NAME`,
 `AUTH_SESSION_COOKIE_SECURE`, `AUTH_SESSION_COOKIE_SAMESITE`,
 `AUTH_DEBUG_OTP`, `AUTH_DEV_OTP_OUTBOX_PATH`, `AUTH_DEMO_OTP_NUMBERS`,
+`AUTH_DEMO_ACCESS_KEY` (secret),
 `FRONTEND_ORIGINS`, `RATE_LIMIT_OTP_REQUEST_IP_LIMIT`,
 `RATE_LIMIT_OTP_REQUEST_IP_WINDOW_SECONDS`,
 `RATE_LIMIT_OTP_REQUEST_PHONE_LIMIT`,
@@ -183,16 +209,28 @@ Compose only), `AUTH_SECRET_KEY`, `AUTH_OTP_TTL_SECONDS`,
 
 ## 6. Known limitations
 
-- **No SMS provider.** Codes reach the backend console and outbox locally, and
-  the sign-in page for listed demo accounts on the review deployment.
+- **No SMS provider.** Codes reach the backend console and outbox locally,
+  and, on the review deployment, the sign-in page of a browser with reviewer
+  access for the four demo accounts only.
 - **Message capture is rule-based, not an AI model.** A deterministic
   interpreter and matcher with a heuristic score; photo and Hindi voice
   capture and language-model interpretation are not built.
 - **Interface in English only.** Messages in Hinglish and some Devanagari
   words are understood by capture, but the screens are not translated.
-- **Per-IP rate limits behind proxies.** Requests reach the backend through
-  the Vercel proxy, so per-IP limits apply per proxy address unless
-  `TRUSTED_PROXY_CIDRS` lists the proxies; per-number limits always apply.
+- **Per-IP rate limits share one address behind the proxy.** Requests reach
+  the backend through Vercel and then Render's own proxy, and
+  `TRUSTED_PROXY_CIDRS` is deliberately left empty: neither proxy's
+  forwarding of `X-Forwarded-For` has been verified, and Vercel's outgoing
+  addresses are not published, so trusting them would let anyone calling the
+  backend directly forge a client address. Forwarded headers are therefore
+  ignored and cannot be spoofed, but every visitor shares the per-IP limits
+  of the proxy address. One noisy client can then make others wait for the
+  window to reset (for example the reviewer access unlock, 10 attempts per
+  15 minutes). It never grants access: per-number limits, lockout and the
+  reviewer access key still apply. If this matters in practice, the planned
+  fix is authenticated proxy forwarding (the Next.js server passes the
+  client IP with a shared secret that the backend checks), not trusting the
+  proxies' address ranges.
 - **Not built (future scope):** salesman offline mode, van loading lists, the
   14-day inactive retailer dashboard, credit-hold release, delivery tracking,
   payments and GST e-invoicing (the last three are out of scope in the brief).
