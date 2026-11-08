@@ -15,7 +15,7 @@ Statuses: **Implemented**, **In progress**, **Partial**, **Pending**,
 | Retailer catalogue with prices and schemes | Implemented | `backend/app/services/catalogue_service.py`, `frontend/src/features/catalogue/` |
 | Cart and order | Implemented | `backend/app/services/retailer_order_service.py`, `frontend/src/features/cart/` |
 | Scheme engine (free goods, slab discounts) | Implemented | `backend/app/services/scheme_engine.py`, `pricing_service.py` |
-| AI capture from a text order | **In progress (Phase A)** | Rule-based interpretation, desk review, submission to a pending order. See "AI order capture" below. |
+| AI capture from a text order | **Implemented (Phase A, rule-based)** | Desk and retailer screens (`frontend/src/features/captures/`), capture API, review, submission to a pending order, aliases. Deterministic rules, not an AI model. Language-model interpretation is pending (Phase B). |
 | Order desk review, confirmation and rejection | Implemented | `backend/app/services/order_service.py`, `desk_order_service.py`, `frontend/src/features/desk/` |
 | Tally export (Tally-oriented CSV) | Implemented | `backend/app/services/tally_export_service.py`, `frontend/src/features/exports/`. Generic CSV; ledger, GST and voucher mapping are done in Tally. |
 | Roles: retailer and order desk, sign-in | Implemented | OTP sign-in, server-side sessions, role checks on every route |
@@ -24,18 +24,18 @@ Statuses: **Implemented**, **In progress**, **Partial**, **Pending**,
 
 | Requirement | Status | Notes |
 |---|---|---|
-| Text messages | **In progress (Phase A)** | Deterministic **rule-based** interpreter (`rules@1`, `backend/app/services/capture_interpreter.py`) and deterministic **rule-based** matcher (`backend/app/services/capture_matcher.py`) are implemented with unit tests. Neither is an AI model. Backend capture service and `/api/v1/captures` API (create, list, read, review, discard, submit to a PENDING_REVIEW `ai_text` order) implemented with service and API tests (A4/A5); screens not built yet. |
+| Text messages | **Implemented (rule-based)** | Deterministic interpreter (`rules@1`) and matcher; capture API and review screens for the order desk and retailers. Neither is an AI model. |
 | Language-model interpretation (Gemini/OpenAI) | **Pending (Phase B)** | Only behind the replaceable interpreter interface, and only if time and credentials permit. Not started. |
 | Photos of handwritten lists | **Pending** | Not started. Needs upload limits, OCR and transcript review. |
 | Hindi voice notes | **Pending** | Not started. Needs audio upload and Hindi speech-to-text. |
-| Retailer self-capture (retailer pastes their own message) | Partial (backend only) | The captures API lets a retailer create, review and submit its own captures; no screens yet. Only the order desk may save aliases. |
-| Map items to SKUs using the retailer's past orders | Partial (Phase A3 matcher) | Implemented in the deterministic matcher: products in the retailer's 20 most recent non-rejected orders get +10. No orders are seeded, so the demo starts without history. Not yet wired into a capture workflow. |
-| Each line shows the original words | In progress (Phase A) | Exact substrings with offsets into the unmodified message. |
-| Each line shows a confidence level | Partial (Phase A3 matcher) | The matcher computes a deterministic heuristic match score (0-100) with a band and reasons. Not a calibrated probability. Not yet stored or shown on screen. |
-| Each line shows two alternative SKUs | Partial (Phase A3 matcher) | The matcher returns up to two alternatives with scores and bands, flagged when weak. With three products, they are the other two. Not yet shown on screen. |
-| Unclear units (case or piece) are asked, not guessed | In progress (Phase A) | Every unit, including "peti", must be confirmed by a person. |
-| No order is placed until a person confirms it | In progress (Phase A) | Capture review creates a PENDING_REVIEW order; the existing desk confirmation is the only step that deducts stock or uses credit. |
-| Desk corrections become aliases for that retailer | In progress (Phase A) | Only for corrected lines, only on explicit opt-in, never overwriting an existing alias without an explicit replacement. |
+| Retailer self-capture (retailer pastes their own message) | Implemented | Retailers capture, review and submit their own messages at `/retailer/capture`. Only the order desk may save aliases. |
+| Map items to SKUs using the retailer's past orders | Implemented (rule-based) | Products in the retailer's 20 most recent non-rejected orders get +10 in the heuristic score. No orders are seeded, so the demo starts without history. |
+| Each line shows the original words | Implemented | Exact substrings, highlighted in the unmodified message. |
+| Each line shows a confidence level | Implemented (heuristic score) | Shown as "60/100 · Possible match" with reasons. A deterministic heuristic, not a probability. |
+| Each line shows two alternative SKUs | Implemented | Up to two alternatives with scores, flagged when weak, with current stock. |
+| Unclear units (case or piece) are asked, not guessed | Implemented | The reviewer chooses cases or pieces for every line (nothing pre-selected); "peti = cases for all lines" is offered only as an explicit choice. |
+| No order is placed until a person confirms it | Implemented | Capture review creates a PENDING_REVIEW order; only the existing desk confirmation deducts stock or uses credit. |
+| Desk corrections become aliases for that retailer | Implemented | Order desk only, corrected lines only, explicit opt-in; an existing alias is replaced only on explicit request and kept in history. |
 
 ## Platform and submission (brief: Part A "Must have")
 

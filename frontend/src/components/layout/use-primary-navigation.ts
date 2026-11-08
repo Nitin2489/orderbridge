@@ -3,6 +3,7 @@
 import {
   FileSpreadsheetIcon,
   InboxIcon,
+  MessageSquareTextIcon,
   ReceiptTextIcon,
   ShoppingCartIcon,
   StoreIcon,
@@ -11,6 +12,7 @@ import {
 import { useSession } from "@/features/auth/session-provider";
 import { useCart } from "@/features/cart/cart-provider";
 import { CART_PATH, CATALOGUE_PATH } from "@/features/cart/paths";
+import { CAPTURE_BASE } from "@/features/captures/paths";
 import { DESK_PATH } from "@/features/desk/paths";
 import { EXPORTS_PATH } from "@/features/exports/paths";
 import { ORDERS_PATH } from "@/features/orders/paths";
@@ -45,6 +47,7 @@ export function usePrimaryNavigation(): readonly NavItem[] {
         icon: InboxIcon,
         activePrefixes: [`${DESK_PATH}/orders`],
       },
+      { href: CAPTURE_BASE.order_desk, label: "Message capture", icon: MessageSquareTextIcon },
       { href: EXPORTS_PATH, label: "Tally export", icon: FileSpreadsheetIcon },
     ];
   }
@@ -55,6 +58,7 @@ export function usePrimaryNavigation(): readonly NavItem[] {
     ...primaryNavigation,
     { href: CATALOGUE_PATH, label: "Catalogue", icon: StoreIcon, exact: true },
     { href: ORDERS_PATH, label: "Orders", icon: ReceiptTextIcon },
+    { href: CAPTURE_BASE.retailer, label: "Message capture", icon: MessageSquareTextIcon },
     {
       href: CART_PATH,
       label: "Cart",
