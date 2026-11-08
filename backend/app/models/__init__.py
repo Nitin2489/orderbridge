@@ -10,6 +10,7 @@ from app.models.enums import (
     SchemeType,
     UserRole,
 )
+from app.models.rate_limit import RateLimitBucket
 from app.models.sales import (
     EXPORT_BATCH_NUMBER_SEQUENCE,
     ORDER_NUMBER_SEQUENCE,
@@ -37,6 +38,7 @@ __all__ = [
     "OtpChallenge",
     "Product",
     "ProductStatus",
+    "RateLimitBucket",
     "Retailer",
     "RetailerProductPrice",
     "Scheme",

@@ -66,7 +66,7 @@ def settings() -> Settings:
         auth_otp_max_attempts=5,
         auth_otp_resend_cooldown_seconds=60,
         auth_session_ttl_seconds=7 * 24 * 60 * 60,
-        auth_debug_otp=True,
+        auth_debug_otp=False,
         auth_session_cookie_secure=False,
         frontend_origins=["http://localhost:3000"],
     )
@@ -322,3 +322,116 @@ def test_racing_issuance_creates_exactly_one_challenge(
     _, challenges = _account_state(test_engine)
     assert [c.id for c in challenges] == [issued[0].challenge_id]
     assert len(_outstanding(challenges)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cumulative lockout
+# ---------------------------------------------------------------------------
+
+
+def _wrong(code: str) -> str:
+    return f"{(int(code) + 1) % 1_000_000:06d}"
+
+
+def _fail_without_commit(session: Session, code: str, settings: Settings) -> str:
+    """A wrong guess left uncommitted, so its locks stay held."""
+    try:
+        verify_otp(session, PHONE, _wrong(code), settings=settings)
+    except OtpVerificationError as error:
+        return error.reason
+
+    raise AssertionError("A wrong code was accepted.")
+
+
+@pytest.fixture
+def one_failure_left(test_engine, committed_account, settings) -> tuple[Settings, str]:
+    """Committed state with exactly one failure left before the lockout.
+
+    Threshold 6: a first challenge is exhausted (5 committed failures), and
+    a second, live challenge is issued (no cooldown, so it can be requested
+    at once). Returns (settings, the second challenge's code).
+    """
+    settings = settings.model_copy(
+        update={
+            "auth_otp_lockout_threshold": 6,
+            "auth_otp_resend_cooldown_seconds": 0,
+        }
+    )
+    first = _issue_code(test_engine, settings)
+    for _ in range(5):
+        with _new_session(test_engine) as session:
+            assert _verify(session, _wrong(first), settings) == (
+                OtpFailureReason.INVALID_CODE
+            )
+
+    return settings, _issue_code(test_engine, settings)
+
+
+def test_second_wrong_guess_waits_and_sees_the_first_failure(
+    test_engine, one_failure_left
+):
+    settings, code = one_failure_left
+
+    first, second = _run_while_holding_locks(
+        test_engine,
+        hold=lambda session: _fail_without_commit(session, code, settings),
+        contend=lambda session: _verify(session, _wrong(code), settings),
+    )
+
+    assert first == OtpFailureReason.INVALID_CODE
+    assert second == OtpFailureReason.LOCKED_OUT
+
+    sessions, challenges = _account_state(test_engine)
+    assert sessions == 0
+    assert sum(challenge.attempts for challenge in challenges) == 6
+
+
+def test_racing_wrong_guesses_cannot_exceed_the_threshold(
+    test_engine, one_failure_left
+):
+    settings, code = one_failure_left
+
+    outcomes = _race(
+        test_engine, lambda session: _verify(session, _wrong(code), settings)
+    )
+
+    assert sorted(outcomes) == sorted(
+        [OtpFailureReason.INVALID_CODE, OtpFailureReason.LOCKED_OUT]
+    )
+    sessions, challenges = _account_state(test_engine)
+    assert sessions == 0
+    assert sum(challenge.attempts for challenge in challenges) == 6
+
+
+def test_correct_code_racing_a_wrong_guess_never_beats_the_lockout(
+    test_engine, one_failure_left
+):
+    """Whichever runs first decides; the other sees its committed result.
+
+    Wrong first: the number is locked and the correct code is refused.
+    Correct first: the sign-in succeeds and the wrong guess finds the
+    challenge consumed. Never both a recorded 6th failure and a session.
+    """
+    settings, code = one_failure_left
+    barrier = threading.Barrier(2, timeout=WAIT_SECONDS)
+
+    def participant(submitted: str) -> str:
+        with _new_session(test_engine) as session:
+            barrier.wait()
+            return _verify(session, submitted, settings)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        right = pool.submit(participant, code)
+        wrong = pool.submit(participant, _wrong(code))
+        outcomes = (
+            right.result(timeout=WAIT_SECONDS * 3),
+            wrong.result(timeout=WAIT_SECONDS * 3),
+        )
+
+    assert outcomes in {
+        (OtpFailureReason.LOCKED_OUT, OtpFailureReason.INVALID_CODE),
+        (SESSION_CREATED, OtpFailureReason.CONSUMED),
+    }
+    sessions, challenges = _account_state(test_engine)
+    attempts = sum(challenge.attempts for challenge in challenges)
+    assert (sessions, attempts) in {(0, 6), (1, 5)}

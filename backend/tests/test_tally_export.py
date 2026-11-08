@@ -34,6 +34,7 @@ from app.models import (
 )
 from app.services import tally_export_service
 from app.services.order_service import confirm_order, preview_order_confirmation
+from app.services.otp_delivery import InMemoryOtpDelivery
 from app.services.retailer_order_service import OrderLineInput, submit_order
 from app.services.tally_export_service import (
     CSV_COLUMNS,
@@ -303,7 +304,7 @@ def make_settings() -> Settings:
         database_url="postgresql+psycopg://unused:unused@localhost:5432/unused",
         auth_secret_key="export-test-secret-0123456789abcdef0123",
         auth_session_cookie_secure=False,
-        auth_debug_otp=True,
+        auth_debug_otp=False,
         frontend_origins=[TRUSTED_ORIGIN],
     )
 
@@ -312,7 +313,7 @@ def make_settings() -> Settings:
 def client(db_session):
     seed_all(db_session)
     db_session.commit()
-    app = create_app(make_settings())
+    app = create_app(make_settings(), otp_delivery=InMemoryOtpDelivery())
 
     def override_get_db():
         yield db_session
@@ -328,9 +329,10 @@ def client(db_session):
 def login(client: TestClient, phone: str) -> None:
     requested = client.post(f"{AUTH}/request-otp", json={"phone_number": phone})
     assert requested.status_code == 200, requested.text
+    # Codes are never in responses; the test delivery channel records them.
+    code = client.app.state.otp_delivery.latest_code(phone)
     verified = client.post(
-        f"{AUTH}/verify-otp",
-        json={"phone_number": phone, "code": requested.json()["debug_otp"]},
+        f"{AUTH}/verify-otp", json={"phone_number": phone, "code": code}
     )
     assert verified.status_code == 200, verified.text
 

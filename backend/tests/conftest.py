@@ -119,6 +119,17 @@ def check_schema_at_head(connection: Connection) -> None:
         )
 
 
+@pytest.fixture(autouse=True)
+def no_exported_dev_otp_outbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore an AUTH_DEV_OTP_OUTBOX_PATH exported in the developer's shell.
+
+    Tests build settings for testing, staging and production, where an outbox
+    is refused at startup; an exported development value would otherwise fail
+    unrelated tests. Tests that need an outbox pass the path explicitly.
+    """
+    monkeypatch.delenv("AUTH_DEV_OTP_OUTBOX_PATH", raising=False)
+
+
 @pytest.fixture(scope="session")
 def test_engine() -> Generator[Engine, None, None]:
     """Engine for the dedicated test database, created once per test run."""

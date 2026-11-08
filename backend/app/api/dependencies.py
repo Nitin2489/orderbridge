@@ -20,6 +20,7 @@ from app.core.origins import (
 )
 from app.models import Retailer, User, UserRole
 from app.services import auth_service
+from app.services.otp_delivery import OtpDelivery
 
 NOT_AUTHENTICATED = "Not authenticated."
 FORBIDDEN = "You do not have permission to perform this action."
@@ -33,8 +34,14 @@ def get_app_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
+def get_otp_delivery(request: Request) -> OtpDelivery:
+    """The OTP delivery channel the application was created with."""
+    return request.app.state.otp_delivery
+
+
 DbSession = Annotated[Session, Depends(get_db)]
 AppSettings = Annotated[Settings, Depends(get_app_settings)]
+OtpDeliveryChannel = Annotated[OtpDelivery, Depends(get_otp_delivery)]
 
 
 def get_current_user(request: Request, db: DbSession, settings: AppSettings) -> User:

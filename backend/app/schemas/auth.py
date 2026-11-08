@@ -43,17 +43,15 @@ class OtpVerifyRequest(PhoneNumberRequest):
 
 
 class OtpRequestAccepted(BaseModel):
-    """Generic response, identical for known and unknown numbers."""
+    """Generic response, identical for known and unknown numbers.
+
+    It has no field that could carry a code: codes leave the backend only
+    through app.services.otp_delivery, never in an HTTP response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     message: str = Field(examples=[OTP_REQUESTED_MESSAGE])
-    debug_otp: str | None = Field(
-        default=None,
-        description=(
-            "Development mock delivery only (AUTH_DEBUG_OTP=true, never in "
-            "production). Present only when a code was issued for an active "
-            "account; omitted from the response otherwise."
-        ),
-    )
 
 
 class RetailerProfile(BaseModel):

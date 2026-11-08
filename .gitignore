@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Local development OTP outbox (AUTH_DEV_OTP_OUTBOX_PATH): contains codes
+/.dev-otp-outbox.jsonl
+
 # Python
 __pycache__/
 *.py[cod]

@@ -46,7 +46,7 @@ def settings() -> Settings:
         auth_otp_max_attempts=5,
         auth_otp_resend_cooldown_seconds=60,
         auth_session_ttl_seconds=7 * 24 * 60 * 60,
-        auth_debug_otp=True,
+        auth_debug_otp=False,
         auth_session_cookie_secure=False,
         frontend_origins=["http://localhost:3000"],
     )
@@ -590,3 +590,228 @@ def test_order_desk_session_needs_no_retailer(db_session, seeded, settings):
     issued = create_session(db_session, desk, settings=settings, now=NOW)
 
     assert authenticate_session(db_session, issued.token, now=NOW) is desk
+
+
+# ---------------------------------------------------------------------------
+# Cumulative lockout across challenges
+# ---------------------------------------------------------------------------
+
+GUPTA_PHONE = "+919000000002"
+AFTER_COOLDOWN = timedelta(seconds=61)
+LOCKOUT_WINDOW = timedelta(hours=24)
+CODE_LIFETIME = timedelta(minutes=5)
+
+
+def with_threshold(settings: Settings, threshold: int) -> Settings:
+    return settings.model_copy(update={"auth_otp_lockout_threshold": threshold})
+
+
+def fail_times(db_session, settings, phone, code, now, times):
+    """Submit `times` wrong codes; each must be an ordinary wrong-code failure."""
+    for _ in range(times):
+        assert_fails(
+            OtpFailureReason.INVALID_CODE,
+            db_session,
+            phone,
+            wrong_code(code),
+            settings,
+            now,
+        )
+
+
+def total_attempts(db_session, phone: str) -> int:
+    return sum(challenge.attempts for challenge in challenges_for(db_session, phone))
+
+
+def test_default_lockout_settings(settings):
+    assert settings.auth_otp_lockout_threshold == 10
+    assert settings.auth_otp_lockout_window_seconds == 24 * 60 * 60
+
+
+def test_five_wrong_guesses_exhaust_a_challenge_without_locking_the_number(
+    db_session, seeded, settings
+):
+    first = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, first.code, NOW, 5)
+    assert_fails(
+        OtpFailureReason.EXHAUSTED,
+        db_session,
+        SHARMA_PHONE,
+        wrong_code(first.code),
+        settings,
+        NOW,
+    )
+
+    # 5 failures are below the default threshold of 10: a new code works.
+    later = NOW + AFTER_COOLDOWN
+    second = request_otp(db_session, SHARMA_PHONE, settings=settings, now=later)
+    assert second is not None
+    issued = verify_otp(
+        db_session, SHARMA_PHONE, second.code, settings=settings, now=later
+    )
+    assert issued.user.phone_number == SHARMA_PHONE
+
+
+def test_failures_accumulate_across_new_challenges_until_locked(
+    db_session, seeded, settings
+):
+    first = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, first.code, NOW, 5)
+
+    # Requesting a new code does not reset the count.
+    t2 = NOW + AFTER_COOLDOWN
+    second = request_otp(db_session, SHARMA_PHONE, settings=settings, now=t2)
+    assert second is not None
+    fail_times(db_session, settings, SHARMA_PHONE, second.code, t2, 5)
+    assert total_attempts(db_session, SHARMA_PHONE) == 10
+
+    # Locked: even the correct code is refused, and nothing more is counted.
+    assert_fails(
+        OtpFailureReason.LOCKED_OUT,
+        db_session,
+        SHARMA_PHONE,
+        second.code,
+        settings,
+        t2,
+    )
+    assert_fails(
+        OtpFailureReason.LOCKED_OUT,
+        db_session,
+        SHARMA_PHONE,
+        wrong_code(second.code),
+        settings,
+        t2,
+    )
+    assert total_attempts(db_session, SHARMA_PHONE) == 10
+
+    # No new code is issued while locked, after any cooldown.
+    t3 = t2 + AFTER_COOLDOWN
+    assert request_otp(db_session, SHARMA_PHONE, settings=settings, now=t3) is None
+    assert len(challenges_for(db_session, SHARMA_PHONE)) == 2
+    assert_fails(
+        OtpFailureReason.LOCKED_OUT,
+        db_session,
+        SHARMA_PHONE,
+        second.code,
+        settings,
+        t3,
+    )
+    assert count(db_session, UserSession) == 0
+
+
+def test_lockout_refuses_a_correct_code_on_a_live_challenge(
+    db_session, seeded, settings
+):
+    settings = with_threshold(settings, 7)
+    first = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, first.code, NOW, 5)
+
+    t2 = NOW + AFTER_COOLDOWN
+    second = request_otp(db_session, SHARMA_PHONE, settings=settings, now=t2)
+    fail_times(db_session, settings, SHARMA_PHONE, second.code, t2, 2)
+
+    # The second challenge is neither expired nor exhausted (2 of 5), but the
+    # number has 7 failures in total.
+    assert_fails(
+        OtpFailureReason.LOCKED_OUT,
+        db_session,
+        SHARMA_PHONE,
+        second.code,
+        settings,
+        t2,
+    )
+    _, latest = challenges_for(db_session, SHARMA_PHONE)
+    assert latest.attempts == 2
+    assert latest.consumed_at is None
+    assert count(db_session, UserSession) == 0
+
+
+def test_lockout_ends_as_failures_leave_the_rolling_window(
+    db_session, seeded, settings
+):
+    first = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, first.code, NOW, 5)
+    t2 = NOW + AFTER_COOLDOWN
+    second = request_otp(db_session, SHARMA_PHONE, settings=settings, now=t2)
+    fail_times(db_session, settings, SHARMA_PHONE, second.code, t2, 5)
+
+    # The first challenge's failures count until the window, widened by the
+    # code lifetime, has passed its creation time.
+    first_leaves = NOW + LOCKOUT_WINDOW + CODE_LIFETIME
+    just_before = first_leaves - timedelta(seconds=1)
+    assert (
+        request_otp(db_session, SHARMA_PHONE, settings=settings, now=just_before)
+        is None
+    )
+    assert_fails(
+        OtpFailureReason.LOCKED_OUT,
+        db_session,
+        SHARMA_PHONE,
+        second.code,
+        settings,
+        just_before,
+    )
+
+    # Then only the second challenge's 5 failures remain: below 10.
+    third = request_otp(db_session, SHARMA_PHONE, settings=settings, now=first_leaves)
+    assert third is not None
+    issued = verify_otp(
+        db_session, SHARMA_PHONE, third.code, settings=settings, now=first_leaves
+    )
+    assert issued.user.phone_number == SHARMA_PHONE
+
+
+def test_successful_sign_in_clears_earlier_failures(db_session, seeded, settings):
+    settings = with_threshold(settings, 7)
+    first = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, first.code, NOW, 5)
+
+    t2 = NOW + AFTER_COOLDOWN
+    second = request_otp(db_session, SHARMA_PHONE, settings=settings, now=t2)
+    fail_times(db_session, settings, SHARMA_PHONE, second.code, t2, 1)
+    verify_otp(db_session, SHARMA_PHONE, second.code, settings=settings, now=t2)
+
+    # 6 earlier failures (including one on the successful challenge) no
+    # longer count. Without the reset, the second wrong code here would
+    # already be refused as locked out (6 + 1 = 7).
+    t3 = t2 + AFTER_COOLDOWN
+    third = request_otp(db_session, SHARMA_PHONE, settings=settings, now=t3)
+    assert third is not None
+    fail_times(db_session, settings, SHARMA_PHONE, third.code, t3, 5)
+    assert_fails(
+        OtpFailureReason.EXHAUSTED,
+        db_session,
+        SHARMA_PHONE,
+        third.code,
+        settings,
+        t3,
+    )
+
+
+def test_lockout_applies_per_phone_number(db_session, seeded, settings):
+    settings = with_threshold(settings, 5)
+    sharma = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, sharma.code, NOW, 5)
+
+    later = NOW + AFTER_COOLDOWN
+    assert request_otp(db_session, SHARMA_PHONE, settings=settings, now=later) is None
+
+    gupta = request_otp(db_session, GUPTA_PHONE, settings=settings, now=later)
+    assert gupta is not None
+    issued = verify_otp(
+        db_session, GUPTA_PHONE, gupta.code, settings=settings, now=later
+    )
+    assert issued.user.phone_number == GUPTA_PHONE
+
+
+def test_locked_out_error_does_not_contain_the_code(db_session, seeded, settings):
+    settings = with_threshold(settings, 1)
+    issued = request_otp(db_session, SHARMA_PHONE, settings=settings, now=NOW)
+    fail_times(db_session, settings, SHARMA_PHONE, issued.code, NOW, 1)
+
+    with pytest.raises(OtpVerificationError) as raised:
+        verify_otp(db_session, SHARMA_PHONE, issued.code, settings=settings, now=NOW)
+
+    assert raised.value.reason == OtpFailureReason.LOCKED_OUT
+    assert issued.code not in str(raised.value)
+    assert SHARMA_PHONE not in str(raised.value)

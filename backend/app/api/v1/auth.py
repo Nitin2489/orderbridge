@@ -11,8 +11,10 @@ from app.api.dependencies import (
     AppSettings,
     CurrentUser,
     DbSession,
+    OtpDeliveryChannel,
     require_trusted_origin,
 )
+from app.api.rate_limits import TOO_MANY_REQUESTS, enforce_otp_rate_limits
 from app.core.config import Settings
 from app.schemas.auth import (
     INVALID_CODE_MESSAGE,
@@ -30,6 +32,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _UNAUTHENTICATED = {401: {"model": ErrorResponse, "description": "Not signed in."}}
 _UNTRUSTED_ORIGIN = {
     403: {"model": ErrorResponse, "description": "Untrusted request origin."}
+}
+_RATE_LIMITED = {
+    429: {
+        "model": ErrorResponse,
+        "description": (
+            f"{TOO_MANY_REQUESTS} Per client IP and per phone number; the "
+            "Retry-After header gives the seconds until the window resets."
+        ),
+    }
 }
 
 
@@ -58,25 +69,37 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
 @router.post(
     "/request-otp",
     response_model=OtpRequestAccepted,
-    response_model_exclude_none=True,
+    responses=_RATE_LIMITED,
     summary="Request a one-time sign-in code",
     description=(
-        "Issues a six-digit code for an active account. The response is the "
-        "same whether or not the number belongs to an account. No SMS "
-        "provider is integrated yet. With AUTH_DEBUG_OTP=true outside "
-        "production, the code is returned as debug_otp; the field is omitted "
-        "otherwise. A new code is not issued within the resend cooldown; the "
-        "previous code stays valid."
+        "Issues a six-digit code for an active account and hands it to the "
+        "configured delivery channel. The response is the same whether or "
+        "not the number belongs to an account, and never contains the code. "
+        "No SMS provider is integrated yet; in local development "
+        "(APP_ENV=development, AUTH_DEBUG_OTP=true) the code is printed to "
+        "the backend's terminal. A new code is not issued within the resend "
+        "cooldown or while the number is locked out; the previous code stays "
+        "valid during the cooldown."
     ),
 )
 def request_otp(
-    payload: OtpRequest, db: DbSession, settings: AppSettings
+    payload: OtpRequest,
+    request: Request,
+    db: DbSession,
+    settings: AppSettings,
+    delivery: OtpDeliveryChannel,
 ) -> OtpRequestAccepted:
+    enforce_otp_rate_limits(
+        db, request, settings, action="request", phone_number=payload.phone_number
+    )
     issued = auth_service.request_otp(db, payload.phone_number, settings=settings)
     db.commit()
 
-    debug_otp = issued.code if issued and settings.debug_otp_enabled else None
-    return OtpRequestAccepted(message=OTP_REQUESTED_MESSAGE, debug_otp=debug_otp)
+    # Deliver only a code that has been committed, so it can be verified.
+    if issued is not None:
+        delivery.deliver(payload.phone_number, issued.code)
+
+    return OtpRequestAccepted(message=OTP_REQUESTED_MESSAGE)
 
 
 @router.post(
@@ -91,14 +114,19 @@ def request_otp(
     responses={
         401: {"model": ErrorResponse, "description": INVALID_CODE_MESSAGE},
         **_UNTRUSTED_ORIGIN,
+        **_RATE_LIMITED,
     },
 )
 def verify_otp(
     payload: OtpVerifyRequest,
+    request: Request,
     response: Response,
     db: DbSession,
     settings: AppSettings,
 ) -> AuthenticatedUser:
+    enforce_otp_rate_limits(
+        db, request, settings, action="verify", phone_number=payload.phone_number
+    )
     try:
         issued = auth_service.verify_otp(
             db, payload.phone_number, payload.code, settings=settings

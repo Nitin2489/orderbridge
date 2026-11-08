@@ -31,6 +31,7 @@ from app.models import (
     SchemeType,
     User,
 )
+from app.services.otp_delivery import InMemoryOtpDelivery
 from seed import seed_all
 
 AUTH = "/api/v1/auth"
@@ -61,7 +62,7 @@ def make_settings() -> Settings:
         auth_secret_key="catalogue-test-secret-0123456789abcdef01",
         auth_otp_resend_cooldown_seconds=60,
         auth_session_cookie_secure=False,
-        auth_debug_otp=True,
+        auth_debug_otp=False,
         frontend_origins=[TRUSTED_ORIGIN],
     )
 
@@ -69,7 +70,7 @@ def make_settings() -> Settings:
 @pytest.fixture
 def client(db_session):
     seed_all(db_session)
-    app = create_app(make_settings())
+    app = create_app(make_settings(), otp_delivery=InMemoryOtpDelivery())
 
     def override_get_db():
         yield db_session
@@ -85,9 +86,10 @@ def client(db_session):
 def login(client: TestClient, phone: str) -> None:
     requested = client.post(f"{AUTH}/request-otp", json={"phone_number": phone})
     assert requested.status_code == 200, requested.text
+    # Codes are never in responses; the test delivery channel records them.
+    code = client.app.state.otp_delivery.latest_code(phone)
     verified = client.post(
-        f"{AUTH}/verify-otp",
-        json={"phone_number": phone, "code": requested.json()["debug_otp"]},
+        f"{AUTH}/verify-otp", json={"phone_number": phone, "code": code}
     )
     assert verified.status_code == 200, verified.text
 

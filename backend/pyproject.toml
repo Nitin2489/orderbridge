@@ -22,3 +22,11 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+# Also skip excluded files when a tool passes them explicitly (pre-commit,
+# editor format-on-save, `ruff format <path>`).
+force-exclude = true
+extend-exclude = [
+    "migrations/versions/1aa9327febc3_create_initial_orderbridge_schema.py",
+]

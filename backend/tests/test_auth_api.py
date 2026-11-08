@@ -6,7 +6,9 @@ uses the dedicated test database. Protected routes under /test-only exist
 only in this test app, to exercise the reusable dependencies.
 """
 
+import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -29,6 +31,11 @@ from app.main import create_app
 from app.models import OtpChallenge, User, UserRole, UserSession
 from app.schemas.auth import INVALID_CODE_MESSAGE, OTP_REQUESTED_MESSAGE
 from app.services import auth_service
+from app.services.otp_delivery import (
+    DevelopmentConsoleOtpDelivery,
+    InMemoryOtpDelivery,
+    NoOtpDelivery,
+)
 from seed import seed_all
 
 API = "/api/v1/auth"
@@ -99,7 +106,7 @@ def make_settings(**overrides) -> Settings:
         "auth_session_cookie_name": COOKIE,
         "auth_session_cookie_secure": False,
         "auth_session_cookie_samesite": "lax",
-        "auth_debug_otp": True,
+        "auth_debug_otp": False,
         "frontend_origins": [TRUSTED_ORIGIN],
     }
     values.update(overrides)
@@ -116,9 +123,20 @@ def production_settings() -> Settings:
 
 
 def build_client(
-    db_session, settings: Settings, *, base_url: str, origin: str
+    db_session,
+    settings: Settings,
+    *,
+    base_url: str,
+    origin: str,
+    configured_delivery: bool = False,
 ) -> TestClient:
-    app = create_app(settings)
+    """A client for an app built with `settings`.
+
+    Codes are recorded by an InMemoryOtpDelivery, unless configured_delivery
+    is set: then the app uses the delivery its settings select.
+    """
+    delivery = None if configured_delivery else InMemoryOtpDelivery()
+    app = create_app(settings, otp_delivery=delivery)
     app.include_router(auth_test_router)
 
     def override_get_db():
@@ -150,10 +168,25 @@ def user_by_phone(db_session, phone: str) -> User:
     return user
 
 
+def delivered_code(client: TestClient, phone: str) -> str:
+    """The latest code the test delivery channel received for `phone`."""
+    return client.app.state.otp_delivery.latest_code(phone)
+
+
 def request_code(client: TestClient, phone: str) -> str:
     response = client.post(f"{API}/request-otp", json={"phone_number": phone})
     assert response.status_code == 200, response.text
-    return response.json()["debug_otp"]
+    assert response.json() == {"message": OTP_REQUESTED_MESSAGE}
+    return delivered_code(client, phone)
+
+
+def keys_in(value) -> set[str]:
+    """Every key in a JSON value, at any depth."""
+    if isinstance(value, dict):
+        return set(value) | {k for item in value.values() for k in keys_in(item)}
+    if isinstance(value, list):
+        return {k for item in value for k in keys_in(item)}
+    return set()
 
 
 def login(client: TestClient, phone: str) -> dict:
@@ -194,9 +227,11 @@ def test_request_otp_for_active_accounts(client, phone):
     response = client.post(f"{API}/request-otp", json={"phone_number": phone})
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["message"] == OTP_REQUESTED_MESSAGE
-    assert len(body["debug_otp"]) == 6 and body["debug_otp"].isdigit()
+    # The response never carries the code; the delivery channel received it.
+    assert response.json() == {"message": OTP_REQUESTED_MESSAGE}
+    code = delivered_code(client, phone)
+    assert len(code) == 6 and code.isdigit()
+    assert code not in response.text
 
 
 def test_unknown_and_inactive_numbers_get_identical_generic_response(
@@ -213,26 +248,198 @@ def test_unknown_and_inactive_numbers_get_identical_generic_response(
     assert db_session.scalars(select(OtpChallenge)).all() == []
 
 
-def test_debug_otp_absent_when_mock_delivery_disabled(db_session, seeded):
-    settings = make_settings(auth_debug_otp=False)
+def test_no_auth_response_contains_the_code(client):
+    requested = client.post(f"{API}/request-otp", json={"phone_number": SHARMA_PHONE})
+    code = delivered_code(client, SHARMA_PHONE)
+    responses = [
+        requested,
+        client.post(
+            f"{API}/verify-otp",
+            json={"phone_number": SHARMA_PHONE, "code": wrong_code(code)},
+        ),
+        client.post(
+            f"{API}/verify-otp", json={"phone_number": SHARMA_PHONE, "code": code}
+        ),
+        client.get(f"{API}/me"),
+        client.post(f"{API}/logout"),
+    ]
+
+    assert [r.status_code for r in responses] == [200, 401, 200, 200, 204]
+    assert requested.json() == {"message": OTP_REQUESTED_MESSAGE}
+    assert code not in requested.text
+    for response in responses:
+        assert all(code not in value for value in response.headers.values())
+        if response.content:
+            keys = {key.lower() for key in keys_in(response.json())}
+            assert not {key for key in keys if "otp" in key or "code" in key}
+
+
+def test_development_delivery_prints_the_code_to_the_backend_terminal_only(
+    db_session, seeded, capsys
+):
+    """APP_ENV=development with AUTH_DEBUG_OTP: the code reaches the backend's
+    stderr, never the response, and it signs the user in."""
+    settings = make_settings(app_env="development", auth_debug_otp=True)
 
     with build_client(
-        db_session, settings, base_url="http://testserver", origin=TRUSTED_ORIGIN
+        db_session,
+        settings,
+        base_url="http://testserver",
+        origin=TRUSTED_ORIGIN,
+        configured_delivery=True,
     ) as client:
+        assert isinstance(client.app.state.otp_delivery, DevelopmentConsoleOtpDelivery)
+        requested = client.post(
+            f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}
+        )
+        printed = capsys.readouterr()
+        (code,) = re.findall(r"\b(\d{6})\b", printed.err)
+
+        verified = client.post(
+            f"{API}/verify-otp", json={"phone_number": SHARMA_PHONE, "code": code}
+        )
+
+    assert requested.json() == {"message": OTP_REQUESTED_MESSAGE}
+    assert code not in requested.text
+    assert code not in printed.out
+    assert SHARMA_PHONE not in printed.err  # the number is masked
+    assert verified.status_code == 200
+
+
+def test_development_outbox_leaves_the_http_response_unchanged(
+    db_session, seeded, capsys, tmp_path
+):
+    """With the outbox enabled the response is still only {message}; the
+    code reaches the backend's terminal and the outbox file, nothing else."""
+    outbox = tmp_path / "outbox.jsonl"
+    settings = make_settings(
+        app_env="development",
+        auth_debug_otp=True,
+        auth_dev_otp_outbox_path=str(outbox),
+    )
+
+    with build_client(
+        db_session,
+        settings,
+        base_url="http://testserver",
+        origin=TRUSTED_ORIGIN,
+        configured_delivery=True,
+    ) as client:
+        requested = client.post(
+            f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}
+        )
+        unknown = client.post(
+            f"{API}/request-otp", json={"phone_number": UNKNOWN_PHONE}
+        )
+        printed = capsys.readouterr()
+        records = [
+            json.loads(line) for line in outbox.read_text(encoding="utf-8").splitlines()
+        ]
+        (record,) = records  # nothing is written for an unknown number
+        code = record["code"]
+
+        verified = client.post(
+            f"{API}/verify-otp", json={"phone_number": SHARMA_PHONE, "code": code}
+        )
+
+    assert requested.json() == unknown.json() == {"message": OTP_REQUESTED_MESSAGE}
+    # Only the request responses: the verify body legitimately holds digits
+    # (phone number, ids) that a random code could match by chance.
+    for response in (requested, unknown):
+        assert code not in response.text
+        assert all(code not in value for value in response.headers.values())
+    assert record["phone_number"] == SHARMA_PHONE
+    # Both development channels received the same code.
+    assert re.findall(r"\b(\d{6})\b", printed.err) == [code]
+    assert verified.status_code == 200
+
+
+def test_outbox_failure_does_not_change_the_otp_request(
+    db_session, seeded, capsys, caplog, tmp_path
+):
+    """The outbox is rejected at delivery time (a symbolic link planted
+    after startup). The request still gets the normal response, identical to
+    an unknown number's, and the console-delivered code still signs in."""
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("untouched", encoding="utf-8")
+    outbox = tmp_path / "outbox.jsonl"  # absent at startup: accepted
+    settings = make_settings(
+        app_env="development",
+        auth_debug_otp=True,
+        auth_dev_otp_outbox_path=str(outbox),
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with build_client(
+        db_session,
+        settings,
+        base_url="http://testserver",
+        origin=TRUSTED_ORIGIN,
+        configured_delivery=True,
+    ) as client:
+        outbox.symlink_to(target)
+        known = client.post(f"{API}/request-otp", json={"phone_number": SHARMA_PHONE})
+        unknown = client.post(
+            f"{API}/request-otp", json={"phone_number": UNKNOWN_PHONE}
+        )
+        (code,) = re.findall(r"\b(\d{6})\b", capsys.readouterr().err)
+
+        verified = client.post(
+            f"{API}/verify-otp", json={"phone_number": SHARMA_PHONE, "code": code}
+        )
+
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json() == {"message": OTP_REQUESTED_MESSAGE}
+    assert code not in known.text
+    assert verified.status_code == 200
+    assert target.read_text(encoding="utf-8") == "untouched"
+
+    outbox_errors = [
+        record
+        for record in caplog.records
+        if record.name == "app.services.otp_delivery"
+        and record.levelno >= logging.ERROR
+    ]
+    assert len(outbox_errors) == 1
+    # Application logs only: SQLAlchemy's statement logging (enabled by the
+    # DEBUG level) prints bound parameters, which legitimately include the
+    # phone number.
+    for record in caplog.records:
+        if record.name.startswith("sqlalchemy"):
+            continue
+        message = record.getMessage()
+        for secret in (code, SHARMA_PHONE, str(outbox), str(target)):
+            assert secret not in message
+        assert record.exc_info is None
+
+
+def test_testing_environment_delivers_nothing_by_default(db_session, seeded):
+    with build_client(
+        db_session,
+        make_settings(),
+        base_url="http://testserver",
+        origin=TRUSTED_ORIGIN,
+        configured_delivery=True,
+    ) as client:
+        assert isinstance(client.app.state.otp_delivery, NoOtpDelivery)
         response = client.post(
             f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}
         )
 
     assert response.json() == {"message": OTP_REQUESTED_MESSAGE}
+    # A code was issued and stored as a digest, but sent nowhere.
+    assert len(db_session.scalars(select(OtpChallenge)).all()) == 1
 
 
-def test_production_never_returns_debug_otp(db_session, seeded):
+def test_production_never_returns_the_code(db_session, seeded):
     with build_client(
         db_session,
         production_settings(),
         base_url="https://testserver",
         origin=PRODUCTION_ORIGIN,
+        configured_delivery=True,
     ) as client:
+        assert isinstance(client.app.state.otp_delivery, NoOtpDelivery)
         response = client.post(
             f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}
         )
@@ -328,6 +535,44 @@ def test_unknown_number_verification_gets_same_error(client):
 
     assert response.status_code == 401
     assert response.json() == {"detail": INVALID_CODE_MESSAGE}
+
+
+def test_locked_out_number_gets_the_same_responses(db_session, seeded):
+    """Locked, wrong and right-but-locked codes are indistinguishable."""
+    settings = make_settings(auth_otp_lockout_threshold=2)
+
+    with build_client(
+        db_session, settings, base_url="http://testserver", origin=TRUSTED_ORIGIN
+    ) as client:
+        code = request_code(client, SHARMA_PHONE)
+        wrong = {"phone_number": SHARMA_PHONE, "code": wrong_code(code)}
+
+        responses = [
+            client.post(f"{API}/verify-otp", json=wrong),
+            client.post(f"{API}/verify-otp", json=wrong),
+            # Locked now: the correct code gets the same answer.
+            client.post(
+                f"{API}/verify-otp",
+                json={"phone_number": SHARMA_PHONE, "code": code},
+            ),
+        ]
+        requested = client.post(
+            f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}
+        )
+
+    for response in responses:
+        assert response.status_code == 401
+        assert response.json() == {"detail": INVALID_CODE_MESSAGE}
+        assert "set-cookie" not in response.headers
+
+    assert requested.status_code == 200
+    assert requested.json()["message"] == OTP_REQUESTED_MESSAGE
+
+    sharma = user_by_phone(db_session, SHARMA_PHONE)
+    sessions = db_session.scalars(
+        select(UserSession).where(UserSession.user_id == sharma.id)
+    ).all()
+    assert sessions == []
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +956,35 @@ def test_raw_otp_and_session_token_are_not_logged(client, caplog):
         if not record.name.startswith("sqlalchemy")
     ]
     assert all(code not in message for message in application_logs)
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_production_does_not_serve_api_documentation(db_session, seeded, path):
+    with build_client(
+        db_session,
+        production_settings(),
+        base_url="https://testserver",
+        origin=PRODUCTION_ORIGIN,
+    ) as client:
+        response = client.get(path)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("app_env", ["development", "testing"])
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_api_documentation_is_served_outside_production(
+    db_session, seeded, app_env, path
+):
+    with build_client(
+        db_session,
+        make_settings(app_env=app_env),
+        base_url="http://testserver",
+        origin=TRUSTED_ORIGIN,
+    ) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
 
 
 def test_health_endpoint_still_works(client):

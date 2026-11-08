@@ -1,3 +1,4 @@
+import ipaddress
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -62,25 +63,58 @@ def secret_looks_like_placeholder(secret: str) -> bool:
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables.
 
-    Authentication settings (all optional outside production):
+    APP_ENV is required and must be one of development, testing, staging or
+    production. A missing or misspelt value fails startup instead of
+    silently running with development settings.
 
-    - AUTH_SECRET_KEY: HMAC key for OTP digests. Required in production with at
-      least 32 characters; obvious placeholders are rejected (see
-      secret_looks_like_placeholder). If empty outside production, a random
-      key is generated per process; outstanding OTPs then stop verifying
-      after a restart (sessions are unaffected).
+    Authentication settings:
+
+    - AUTH_SECRET_KEY: HMAC key for OTP digests. Required in staging and
+      production with at least 32 characters; obvious placeholders are
+      rejected (see secret_looks_like_placeholder). If empty in development
+      or testing, a random key is generated per process; outstanding OTPs
+      then stop verifying after a restart (sessions are unaffected).
     - AUTH_OTP_TTL_SECONDS, AUTH_OTP_MAX_ATTEMPTS,
       AUTH_OTP_RESEND_COOLDOWN_SECONDS, AUTH_SESSION_TTL_SECONDS: lifetimes
       and limits.
+    - AUTH_OTP_LOCKOUT_THRESHOLD, AUTH_OTP_LOCKOUT_WINDOW_SECONDS: cumulative
+      brute-force protection. Once a phone number has this many failed
+      verifications within the rolling window, across all of its challenges,
+      verification and issuance are refused until enough failures leave the
+      window. A successful sign-in clears earlier failures. Defaults: 10
+      failures in 24 hours.
     - AUTH_SESSION_COOKIE_NAME, AUTH_SESSION_COOKIE_SECURE,
       AUTH_SESSION_COOKIE_SAMESITE: session cookie. Secure defaults to true;
       set it to false only for local HTTP development. SameSite "none"
       requires Secure.
-    - AUTH_DEBUG_OTP: development mock delivery; returns the OTP in the API
-      response. Rejected when APP_ENV=production.
+    - AUTH_DEBUG_OTP: local development delivery. The backend prints each
+      issued code to its own terminal (app.services.otp_delivery); codes are
+      never returned in API responses in any environment. Allowed only when
+      APP_ENV=development; rejected in testing, staging and production.
+    - AUTH_DEV_OTP_OUTBOX_PATH: optional local development "mock SMS outbox".
+      Each issued code is also appended, as a JSON line, to this file, so
+      end-to-end tests on the same machine can read it from disk. Only
+      allowed with APP_ENV=development and AUTH_DEBUG_OTP=true. A relative
+      path is resolved against the repository root; the directory must exist.
     - FRONTEND_ORIGINS: JSON list of trusted frontend origins, used for CORS
       and for the CSRF origin check. Canonicalised and de-duplicated. Must be
       https in production.
+
+    Abuse protection:
+
+    - RATE_LIMIT_OTP_{REQUEST,VERIFY}_{IP,PHONE}_LIMIT and ..._WINDOW_SECONDS:
+      fixed-window limits on the two unauthenticated OTP endpoints, per
+      client IP and per normalised phone number, shared through PostgreSQL
+      (app.services.rate_limit). Defaults: request-otp 30 per IP per 15
+      minutes and 5 per number per hour; verify-otp 60 per IP per 15 minutes
+      and 15 per number per hour. Exceeding one returns 429 + Retry-After.
+    - RATE_LIMIT_CLEANUP_PROBABILITY: chance (0-1) that a rate-limited
+      request also deletes a bounded batch of expired counters.
+    - TRUSTED_PROXY_CIDRS: JSON list of networks whose X-Forwarded-For header
+      is believed (app.core.client_ip). Empty (default): forwarded headers are
+      ignored and the TCP peer address is the client. Never "everything".
+    - MAX_REQUEST_BODY_BYTES: largest accepted request body (default 64 KiB);
+      larger bodies get 413 before they are read into memory.
 
     Production deployment assumption: browsers reach the API same-origin
     through the Next.js proxy (browser -> Next.js -> FastAPI). The session
@@ -92,7 +126,8 @@ class Settings(BaseSettings):
 
     app_name: str = "OrderBridge"
     app_version: str = "0.1.0"
-    app_env: Literal["development", "testing", "production"] = "development"
+    # Required: no default, so a deployment cannot silently run as development.
+    app_env: Literal["development", "testing", "staging", "production"]
 
     database_url: SecretStr = Field(repr=False)
 
@@ -100,6 +135,8 @@ class Settings(BaseSettings):
     auth_otp_ttl_seconds: int = Field(default=300, gt=0)
     auth_otp_max_attempts: int = Field(default=5, gt=0)
     auth_otp_resend_cooldown_seconds: int = Field(default=60, ge=0)
+    auth_otp_lockout_threshold: int = Field(default=10, gt=0)
+    auth_otp_lockout_window_seconds: int = Field(default=24 * 60 * 60, gt=0)
     auth_session_ttl_seconds: int = Field(default=7 * 24 * 60 * 60, gt=0)
     auth_session_cookie_name: str = Field(
         default="orderbridge_session", pattern=r"^[A-Za-z0-9_-]+$"
@@ -107,9 +144,32 @@ class Settings(BaseSettings):
     auth_session_cookie_secure: bool = True
     auth_session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     auth_debug_otp: bool = False
+    auth_dev_otp_outbox_path: str | None = None
     frontend_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
+
+    # Rate limits (fixed windows; windows at most one day).
+    rate_limit_otp_request_ip_limit: int = Field(default=30, gt=0)
+    rate_limit_otp_request_ip_window_seconds: int = Field(
+        default=15 * 60, gt=0, le=24 * 60 * 60
+    )
+    rate_limit_otp_request_phone_limit: int = Field(default=5, gt=0)
+    rate_limit_otp_request_phone_window_seconds: int = Field(
+        default=60 * 60, gt=0, le=24 * 60 * 60
+    )
+    rate_limit_otp_verify_ip_limit: int = Field(default=60, gt=0)
+    rate_limit_otp_verify_ip_window_seconds: int = Field(
+        default=15 * 60, gt=0, le=24 * 60 * 60
+    )
+    rate_limit_otp_verify_phone_limit: int = Field(default=15, gt=0)
+    rate_limit_otp_verify_phone_window_seconds: int = Field(
+        default=60 * 60, gt=0, le=24 * 60 * 60
+    )
+    rate_limit_cleanup_probability: float = Field(default=0.01, ge=0, le=1)
+
+    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
+    max_request_body_bytes: int = Field(default=64 * 1024, ge=1024, le=10 * 1024 * 1024)
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT.parent / ".env",
@@ -142,6 +202,38 @@ class Settings(BaseSettings):
 
         return normalised
 
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def _normalise_trusted_proxies(cls, cidrs: list[str]) -> list[str]:
+        """Canonical network strings; reject malformed and catch-all entries."""
+        normalised: list[str] = []
+
+        for cidr in cidrs:
+            try:
+                network = ipaddress.ip_network(cidr.strip(), strict=False)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid trusted proxy network {cidr!r}: use an IP address "
+                    "or CIDR such as 10.0.0.0/8."
+                ) from None
+
+            if network.prefixlen == 0:
+                raise ValueError(
+                    f"Trusted proxy network {cidr!r} would trust every client's "
+                    "X-Forwarded-For header; list the proxies' own networks."
+                )
+
+            if str(network) not in normalised:
+                normalised.append(str(network))
+
+        return normalised
+
+    @property
+    def trusted_proxy_networks(
+        self,
+    ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        return tuple(ipaddress.ip_network(cidr) for cidr in self.trusted_proxy_cidrs)
+
     @model_validator(mode="after")
     def _check_auth_settings(self) -> Self:
         if (
@@ -153,23 +245,34 @@ class Settings(BaseSettings):
                 "AUTH_SESSION_COOKIE_SECURE=true."
             )
 
+        if self.auth_debug_otp and self.app_env != "development":
+            raise ValueError(
+                "AUTH_DEBUG_OTP=true is only allowed when APP_ENV=development "
+                f"(APP_ENV is {self.app_env})."
+            )
+
+        self._check_dev_otp_outbox()
+
         secret = self.auth_secret_key.get_secret_value() if self.auth_secret_key else ""
+        deployed = self.app_env in ("staging", "production")
+
+        if deployed:
+            if len(secret) < MIN_PRODUCTION_SECRET_LENGTH:
+                raise ValueError(
+                    f"Unsafe {self.app_env} configuration: AUTH_SECRET_KEY must "
+                    "be set to a random value of at least "
+                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters."
+                )
+            if secret_looks_like_placeholder(secret):
+                raise ValueError(
+                    f"Unsafe {self.app_env} configuration: AUTH_SECRET_KEY looks "
+                    "like a placeholder or development value; generate a random "
+                    "one."
+                )
 
         if self.app_env == "production":
             problems = []
 
-            if len(secret) < MIN_PRODUCTION_SECRET_LENGTH:
-                problems.append(
-                    "AUTH_SECRET_KEY must be set to a random value of at least "
-                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters"
-                )
-            elif secret_looks_like_placeholder(secret):
-                problems.append(
-                    "AUTH_SECRET_KEY looks like a placeholder or development "
-                    "value; generate a random one"
-                )
-            if self.auth_debug_otp:
-                problems.append("AUTH_DEBUG_OTP must be false")
             if not self.auth_session_cookie_secure:
                 problems.append("AUTH_SESSION_COOKIE_SECURE must be true")
             if not self.frontend_origins:
@@ -181,16 +284,67 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Unsafe production configuration: " + "; ".join(problems) + "."
                 )
-        elif not secret:
+        elif not deployed and not secret:
             # Development and testing only: a random key for this process.
             self.auth_secret_key = SecretStr(secrets.token_urlsafe(32))
 
         return self
 
+    @field_validator("auth_dev_otp_outbox_path")
+    @classmethod
+    def _blank_outbox_is_unset(cls, value: str | None) -> str | None:
+        """An empty AUTH_DEV_OTP_OUTBOX_PATH means "not configured"."""
+        if value is None or not value.strip():
+            return None
+        return value.strip()
+
+    def _check_dev_otp_outbox(self) -> None:
+        """The outbox is a development-only file in an existing directory."""
+        if self.auth_dev_otp_outbox_path is None:
+            return
+
+        if self.app_env != "development" or not self.auth_debug_otp:
+            raise ValueError(
+                "AUTH_DEV_OTP_OUTBOX_PATH is only allowed with "
+                "APP_ENV=development and AUTH_DEBUG_OTP=true "
+                f"(APP_ENV is {self.app_env})."
+            )
+
+        path = self._resolved_outbox_path(self.auth_dev_otp_outbox_path)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError(
+                "AUTH_DEV_OTP_OUTBOX_PATH must name a regular file, not a "
+                "directory or a symbolic link."
+            )
+        if not path.parent.is_dir():
+            raise ValueError(
+                "AUTH_DEV_OTP_OUTBOX_PATH: the directory for the outbox file "
+                "does not exist."
+            )
+
+    @staticmethod
+    def _resolved_outbox_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            # The repository root, which also holds the .env file.
+            path = PROJECT_ROOT.parent / path
+        return path
+
+    @property
+    def dev_otp_outbox_file(self) -> Path | None:
+        """The outbox file, only when development OTP delivery is enabled."""
+        if self.auth_dev_otp_outbox_path is None or not self.debug_otp_enabled:
+            return None
+        return self._resolved_outbox_path(self.auth_dev_otp_outbox_path)
+
     @property
     def debug_otp_enabled(self) -> bool:
-        """True only when mock OTP delivery is on and this is not production."""
-        return self.auth_debug_otp and self.app_env != "production"
+        """True only for local development console delivery of OTPs.
+
+        Validation already refuses AUTH_DEBUG_OTP outside development; the
+        environment is checked again here so this can never be true there.
+        """
+        return self.auth_debug_otp and self.app_env == "development"
 
     @property
     def auth_secret(self) -> str:

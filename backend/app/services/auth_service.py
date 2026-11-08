@@ -30,6 +30,24 @@ are per account; there is no table or global lock.
 PostgreSQL concurrency tests (tests/test_auth_concurrency.py) exercise
 these guarantees with separate connections, because sequential tests on one
 connection can never observe lock waits.
+
+Cumulative lockout
+------------------
+Each challenge allows auth_otp_max_attempts wrong codes, but a new challenge
+can be requested after the resend cooldown, so the per-challenge limit alone
+does not bound guessing. Failures are therefore also counted per phone
+number across challenges: the sum of otp_challenges.attempts over the
+lockout window, excluding challenges at or before the latest successful
+sign-in (see _recent_failures). At auth_otp_lockout_threshold failures the
+number is locked: verification fails (even with a correct code) and no new
+code is issued, until older failures leave the rolling window.
+
+The count is derived from the challenge rows, so no extra table is needed
+and requesting a new code cannot reset it. It is read only while this
+transaction holds the locks that serialise every change to it: the user row
+in request_otp(), and the latest challenge row in verify_otp() (attempts are
+only ever incremented on the latest challenge, under that lock). Two
+concurrent wrong guesses therefore cannot both slip under the threshold.
 """
 
 import re
@@ -38,7 +56,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -64,6 +82,7 @@ class OtpFailureReason(StrEnum):
     EXHAUSTED = "exhausted"
     INVALID_CODE = "invalid_code"
     ACCOUNT_UNAVAILABLE = "account_unavailable"
+    LOCKED_OUT = "locked_out"
 
 
 class OtpVerificationError(Exception):
@@ -82,8 +101,8 @@ class OtpVerificationError(Exception):
 class IssuedOtp:
     """A newly issued challenge.
 
-    code is the raw OTP: hand it to a delivery channel (or, in development,
-    the debug response) and never persist or log it.
+    code is the raw OTP: hand it to a delivery channel
+    (app.services.otp_delivery) and never persist, log or return it.
     """
 
     challenge_id: UUID
@@ -150,6 +169,51 @@ def _lock_account(session: Session, phone: str) -> tuple[User | None, Retailer |
     return user, retailer
 
 
+def _recent_failures(
+    session: Session, phone: str, *, settings: Settings, now: datetime
+) -> int:
+    """Failed verifications for `phone` that count towards the lockout.
+
+    Sums attempts over the number's challenges that were created after its
+    latest successful sign-in and inside the window. A challenge's failures
+    happen between its creation and its expiry, so the window is widened by
+    the code lifetime: failures are never undercounted, at the cost of
+    counting some for up to one code lifetime longer than the window.
+
+    Call only while holding the lock that serialises changes to the counts
+    (see the module docstring).
+    """
+    window_start = now - timedelta(
+        seconds=settings.auth_otp_lockout_window_seconds + settings.auth_otp_ttl_seconds
+    )
+    conditions = [
+        OtpChallenge.phone_number == phone,
+        OtpChallenge.created_at > window_start,
+    ]
+
+    # A correct code sets consumed_at; everything up to and including that
+    # challenge is cleared by the successful sign-in.
+    last_success = session.scalar(
+        select(func.max(OtpChallenge.created_at)).where(
+            OtpChallenge.phone_number == phone,
+            OtpChallenge.consumed_at.is_not(None),
+        )
+    )
+    if last_success is not None:
+        conditions.append(OtpChallenge.created_at > last_success)
+
+    return session.scalar(
+        select(func.coalesce(func.sum(OtpChallenge.attempts), 0)).where(*conditions)
+    )
+
+
+def _is_locked_out(
+    session: Session, phone: str, *, settings: Settings, now: datetime
+) -> bool:
+    failures = _recent_failures(session, phone, settings=settings, now=now)
+    return failures >= settings.auth_otp_lockout_threshold
+
+
 def request_otp(
     session: Session,
     phone_number: str,
@@ -160,8 +224,10 @@ def request_otp(
     """Issue a new OTP challenge for an eligible account.
 
     Returns None, without creating anything, when the number is unknown or
-    ineligible, or when an outstanding challenge was issued within the resend
-    cooldown (that challenge stays valid). Otherwise every outstanding
+    ineligible, when it is locked out after too many failed verifications
+    (a code could not be used anyway), or when an outstanding challenge was
+    issued within the resend cooldown (that challenge stays valid). The
+    caller's response must be the same in every case. Otherwise every outstanding
     challenge for the number is invalidated (expired now) and a new one is
     created. Only the HMAC digest of the code is stored.
     """
@@ -178,6 +244,10 @@ def request_otp(
         now = _utcnow()
 
     if not _is_account_eligible(user, retailer):
+        return None
+
+    # Under the user row lock taken above, like every new challenge.
+    if _is_locked_out(session, phone, settings=settings, now=now):
         return None
 
     outstanding = (
@@ -236,8 +306,11 @@ def verify_otp(
     following the module's lock order, so concurrent attempts for one
     account are serialised: once one request consumes the challenge, every
     other one sees it as consumed. A wrong code increments attempts; after
-    auth_otp_max_attempts failures the challenge is exhausted. A correct
-    code consumes the challenge, then the locked account is re-checked.
+    auth_otp_max_attempts failures the challenge is exhausted. A number
+    with auth_otp_lockout_threshold recent failures across its challenges is
+    locked out: every code is refused, even a correct one, and nothing more
+    is counted. A correct code consumes the challenge, then the locked
+    account is re-checked.
 
     Raises OtpVerificationError. The caller must still commit, so recorded
     attempts and consumption persist.
@@ -270,6 +343,13 @@ def verify_otp(
 
     if challenge is None:
         raise OtpVerificationError(OtpFailureReason.NO_CHALLENGE)
+
+    # Read after the latest challenge is locked: every failure is recorded on
+    # the latest challenge under this lock, so a concurrent verification has
+    # either committed its failure (and it is counted here) or is waiting.
+    if _is_locked_out(session, phone, settings=settings, now=now):
+        raise OtpVerificationError(OtpFailureReason.LOCKED_OUT)
+
     if challenge.consumed_at is not None:
         raise OtpVerificationError(OtpFailureReason.CONSUMED)
     if challenge.expires_at <= now:
