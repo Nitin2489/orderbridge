@@ -28,13 +28,20 @@ export const authenticatedUserSchema = z.object({
 });
 
 /**
- * OtpRequestAccepted: only a generic message. Codes are delivered by the
- * backend (SMS, or the development console and outbox), never over HTTP.
- * z.object strips unknown keys, so even an unexpected code-like field in a
- * response never reaches the UI.
+ * OtpRequestAccepted: a generic message. Codes are delivered by the backend
+ * (SMS, or the development console and outbox). The one exception is
+ * demo_code, present only for the demonstration accounts a deployment lists
+ * in AUTH_DEMO_OTP_NUMBERS (a reviewed deployment without SMS). z.object
+ * strips any other key, so nothing else code-like reaches the UI.
  */
 export const otpRequestAcceptedSchema = z.object({
   message: z.string(),
+  // Anything other than six digits is ignored rather than shown.
+  demo_code: z
+    .string()
+    .regex(/^\d{6}$/)
+    .optional()
+    .catch(undefined),
 });
 
 export type RetailerProfile = z.infer<typeof retailerProfileSchema>;

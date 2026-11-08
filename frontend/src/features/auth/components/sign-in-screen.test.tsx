@@ -103,6 +103,39 @@ describe("sign-in: mobile number step", () => {
     }
   });
 
+  it("shows a listed demo account's code in a labelled note, without filling it in", async () => {
+    mockApi({
+      "GET /auth/me": NOT_AUTHENTICATED,
+      "POST /auth/request-otp": json(200, { ...GENERIC_ACCEPTED, demo_code: "482913" }),
+    });
+    const user = userEvent.setup();
+    renderSignIn();
+
+    await submitPhone(user);
+
+    await screen.findByRole("heading", { name: "Enter your code" });
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent("Demo account. Your code is 482913");
+    expect(note).toHaveTextContent("no SMS provider");
+    for (const box of screen.getAllByRole("textbox")) {
+      expect(box).toHaveValue("");
+    }
+  });
+
+  it("ignores a malformed demo code", async () => {
+    mockApi({
+      "GET /auth/me": NOT_AUTHENTICATED,
+      "POST /auth/request-otp": json(200, { ...GENERIC_ACCEPTED, demo_code: "48<b>13" }),
+    });
+    const user = userEvent.setup();
+    renderSignIn();
+
+    await submitPhone(user);
+
+    await screen.findByRole("heading", { name: "Enter your code" });
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("reports a connection failure and stays on the number step", async () => {
     mockApi({
       "GET /auth/me": NOT_AUTHENTICATED,

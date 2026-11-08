@@ -21,17 +21,23 @@ export const RESEND_COOLDOWN_SECONDS = 60;
 interface IssuedCode {
   /** When the current code was requested (epoch milliseconds). */
   at: number;
+  /** The code itself, only for a listed demonstration account. */
+  demoCode?: string;
 }
 
 /**
  * Track when a usable code was last issued for a number. A request inside
  * the cooldown issues nothing new, so the earlier code and countdown stay.
  */
-function nextIssuedCode(previous: IssuedCode | undefined, timestamp: number): IssuedCode {
+function nextIssuedCode(
+  previous: IssuedCode | undefined,
+  timestamp: number,
+  demoCode: string | undefined,
+): IssuedCode {
   if (previous && timestamp - previous.at < RESEND_COOLDOWN_SECONDS * 1000) {
     return previous;
   }
-  return { at: timestamp };
+  return demoCode ? { at: timestamp, demoCode } : { at: timestamp };
 }
 
 /** The two-step OTP sign-in: mobile number, then code. */
@@ -54,11 +60,11 @@ export function SignInFlow() {
     inFlight.current = true;
     setRequestedNumber(target);
     requestOtp.mutate(target, {
-      onSuccess: () => {
+      onSuccess: (accepted) => {
         const timestamp = now();
         setIssued((current) => ({
           ...current,
-          [target]: nextIssuedCode(current[target], timestamp),
+          [target]: nextIssuedCode(current[target], timestamp, accepted.demo_code),
         }));
         setPhoneNumber(target);
         setResent(isResend);
@@ -89,6 +95,19 @@ export function SignInFlow() {
             If <span className="font-medium text-foreground">{formatPhoneNumber(phoneNumber)}</span>{" "}
             is registered with OrderBridge, a 6-digit code is on its way. It expires in a few
             minutes.
+            {current.demoCode ? (
+              <span
+                role="note"
+                className="mt-3 block rounded-lg border border-dashed bg-secondary/60 p-3 text-foreground"
+              >
+                <span className="font-medium">Demo account.</span> Your code is{" "}
+                <span className="font-mono text-base font-semibold tracking-widest">
+                  {current.demoCode}
+                </span>
+                . It is shown here only because this demonstration has no SMS provider; real
+                accounts receive their code by SMS.
+              </span>
+            ) : null}
           </p>
         }
       >
