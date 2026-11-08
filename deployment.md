@@ -111,8 +111,26 @@ _Planned; this section will be confirmed with the live URLs once deployed._
 | Part | Host | Notes |
 |---|---|---|
 | Database | Managed PostgreSQL 17 (for example Render PostgreSQL) | |
-| Backend | Render web service, root `backend/` | Build `uv sync --frozen`; pre-deploy `uv run alembic upgrade head && uv run python seed.py && uv run python seed_demo.py`; start `uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-proxy-headers` |
+| Backend | Render web service, root `backend/` | Build `uv sync --frozen`; pre-deploy `uv run alembic upgrade head` (migrations only); start `uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-proxy-headers` |
 | Frontend | Vercel, root `frontend/` | `BACKEND_ORIGIN` set to the backend's public origin at build time |
+
+**Seed once, by hand.** After the first successful deploy, run from the
+backend service's shell:
+
+```bash
+uv run python seed.py
+uv run python seed_demo.py
+```
+
+Do not put the seed scripts in the pre-deploy command. `seed.py` resets the
+products' details and stock to the brief's sample values, so running it on
+every deploy would restore stock that confirmed orders have already used.
+`seed_demo.py` is idempotent, but it depends on `seed.py` having run.
+
+**Database URL.** Render shows the database URL as `postgres://…` or
+`postgresql://…`. The backend uses the psycopg 3 driver, so set
+`DATABASE_URL` with the driver named: `postgresql+psycopg://…` (same user,
+password, host and database).
 
 Production settings: `APP_ENV=production` (API docs are then disabled),
 `AUTH_SESSION_COOKIE_SECURE=true`, `AUTH_DEBUG_OTP=false`, no outbox path,
