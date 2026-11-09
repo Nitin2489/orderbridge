@@ -136,6 +136,8 @@ export interface CreateCaptureVariables {
   message: string;
   clientRequestId: string;
   retailerId: string | null;
+  /** Order desk: create it even though it looks like a recent duplicate. */
+  allowDuplicate?: boolean;
   sessionUserId: string;
 }
 
@@ -143,10 +145,18 @@ export function useCreateCapture() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: [...captureKeys.all, "create"],
-    mutationFn: async ({ message, clientRequestId, retailerId }: CreateCaptureVariables) => {
-      const body: Record<string, string> = { client_request_id: clientRequestId, message };
+    mutationFn: async ({
+      message,
+      clientRequestId,
+      retailerId,
+      allowDuplicate,
+    }: CreateCaptureVariables) => {
+      const body: Record<string, string | boolean> = { client_request_id: clientRequestId, message };
       if (retailerId) {
         body.retailer_id = retailerId;
+      }
+      if (allowDuplicate) {
+        body.allow_duplicate = true;
       }
       const { data } = await apiRequestWithStatus<unknown>("/captures", {
         method: "POST",

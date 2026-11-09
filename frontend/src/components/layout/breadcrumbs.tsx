@@ -48,7 +48,7 @@ export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
               ) : (
                 <Link
                   href={item.href}
-                  className="rounded-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[2px] focus-visible:ring-ring/50"
+                  className="tap-target rounded-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[2px] focus-visible:ring-ring/50"
                 >
                   {item.label}
                 </Link>

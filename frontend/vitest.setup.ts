@@ -23,6 +23,11 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 // Vitest globals are off, so Testing Library cannot register this itself.
 afterEach(async () => {
   cleanup();
+  // The saved cart and theme live in localStorage: no test sees another's.
+  // (Node-environment tests, such as the e2e helpers, have no window.)
+  if (typeof window !== "undefined") {
+    window.localStorage.clear();
+  }
   const navigation = await import("./src/test/navigation-mock");
   navigation.setPathname("/");
 });

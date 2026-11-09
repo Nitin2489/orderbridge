@@ -41,6 +41,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("sign-in: slow session check", () => {
+  it("explains a possible server wake-up while the check is slow, then shows the form", async () => {
+    const session = deferred(NOT_AUTHENTICATED);
+    mockApi({ "GET /auth/me": session.handler });
+    renderSignIn();
+
+    expect(screen.getByText("Checking your session…")).toBeInTheDocument();
+    expect(screen.queryByText(/server may be waking up/)).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/server may be waking up/, {}, { timeout: 4_000 }),
+    ).toBeInTheDocument();
+
+    session.resolve();
+
+    expect(await screen.findByLabelText("Mobile number")).toBeInTheDocument();
+    expect(screen.queryByText(/server may be waking up/)).not.toBeInTheDocument();
+  }, 10_000);
+});
+
 describe("sign-in: mobile number step", () => {
   it("validates the number before calling the backend", async () => {
     const backend = mockApi({ "GET /auth/me": NOT_AUTHENTICATED });

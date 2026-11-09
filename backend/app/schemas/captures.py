@@ -11,7 +11,7 @@ not probabilities or confidence percentages.
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -60,8 +60,17 @@ class CreateCaptureRequest(BaseModel):
     retailer_id: UUID | None = Field(
         default=None,
         description=(
-            "Order desk only: the retailer the message is from. Retailers "
+            "Order desk only: the retailer the order is for. Retailers "
             "must omit it; their captures are always for their own account."
+        ),
+    )
+    allow_duplicate: bool = Field(
+        default=False,
+        description=(
+            "Order desk only: create the capture even though this retailer has "
+            "a capture with an equivalent message from the last 24 hours (a "
+            "genuine repeat order). Without it such a request gets 409 "
+            "possible_duplicate and nothing is stored."
         ),
     )
 
@@ -142,6 +151,13 @@ class InterpretationInfo(BaseModel):
     kind: InterpreterKind
     is_ai_model: bool
     description: str
+    fallback_note: str | None = Field(
+        default=None,
+        description=(
+            "Set when the AI reader was configured but its answer could not be "
+            "used, so the rule-based reader produced the lines."
+        ),
+    )
 
 
 class CandidateResponse(BaseModel):
@@ -297,7 +313,7 @@ class CaptureDetail(BaseModel):
             version=capture.version,
             status=CaptureStatus(capture.status),
             channel=CaptureChannel(capture.channel),
-            interpretation=_interpretation(capture.interpreter),
+            interpretation=_interpretation(capture.interpreter, data),
             retailer=_retailer(capture),
             original_message=capture.original_message,
             ignored=[IgnoredTextResponse(**span) for span in data.get("ignored", [])],
@@ -348,6 +364,24 @@ class CaptureLinesErrorResponse(BaseModel):
     issues: list[CaptureLineIssueResponse]
 
 
+class PossibleDuplicateCapture(BaseModel):
+    capture_id: UUID
+    created_at: datetime
+    status: CaptureStatus
+    order: CaptureOrderLink | None = Field(
+        description="The order created from that capture, if any."
+    )
+
+
+class PossibleDuplicateResponse(BaseModel):
+    """409: an equivalent message for this retailer was captured recently.
+    Nothing was stored."""
+
+    detail: str
+    code: Literal["possible_duplicate"] = "possible_duplicate"
+    duplicates: list[PossibleDuplicateCapture]
+
+
 class AliasConflictResponse(BaseModel):
     detail: str
     line_number: int
@@ -390,8 +424,19 @@ def _unresolved(capture: OrderCapture) -> list[int]:
     ]
 
 
-def _interpretation(name: str) -> InterpretationInfo:
+_AI_FALLBACK_NOTES = {
+    "timeout": "The AI reader did not answer in time.",
+    "unavailable": "The AI reader could not be reached.",
+    "invalid_output": "The AI reader's answer did not pass the checks.",
+    "incomplete": "The AI reader left out part of the message.",
+    "empty": "The AI reader found no order lines.",
+}
+
+
+def _interpretation(name: str, data: Mapping[str, Any]) -> InterpretationInfo:
     if name == RULES_INTERPRETER_NAME:
+        reason = data.get("ai_fallback")
+        note = _AI_FALLBACK_NOTES.get(reason) if isinstance(reason, str) else None
         return InterpretationInfo(
             name=name,
             kind=InterpreterKind.RULES,
@@ -400,12 +445,22 @@ def _interpretation(name: str) -> InterpretationInfo:
                 "Rule-based interpretation: deterministic word rules and "
                 "product matching. Not an AI model."
             ),
+            fallback_note=(
+                f"{note} The rule-based reader was used instead." if note else None
+            ),
         )
     return InterpretationInfo(
         name=name,
         kind=InterpreterKind.LANGUAGE_MODEL,
         is_ai_model=True,
-        description="Interpreted by a language model.",
+        description=(
+            "Read by an AI language model (Gemini); products were matched by "
+            "OrderBridge's rules and every phrase was checked against the "
+            "message."
+            # What happens next depends on who is reviewing, so the screen
+            # adds it (a retailer's order waits for the desk; the desk's own
+            # order waits in its queue).
+        ),
     )
 
 

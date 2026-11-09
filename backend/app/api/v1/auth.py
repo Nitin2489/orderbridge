@@ -100,6 +100,7 @@ def _demo_number_without_access(
 @router.post(
     "/request-otp",
     response_model=OtpRequestAccepted,
+    dependencies=[Depends(require_trusted_origin)],
     # demo_code is omitted unless set, so every other response is unchanged.
     response_model_exclude_none=True,
     responses=_RATE_LIMITED,

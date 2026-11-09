@@ -26,12 +26,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import (
     FORBIDDEN,
+    AppSettings,
     CurrentUser,
     DbSession,
     require_trusted_origin,
 )
 from app.api.transactions import rollback_after_error
-from app.models import CaptureStatus, OrderCapture, UserRole
+from app.models import CaptureStatus, OrderCapture, OrderStatus, UserRole
 from app.schemas.auth import ErrorResponse
 from app.schemas.captures import (
     AliasConflictResponse,
@@ -44,6 +45,8 @@ from app.schemas.captures import (
     CaptureSummary,
     CreateCaptureRequest,
     DiscardCaptureRequest,
+    PossibleDuplicateCapture,
+    PossibleDuplicateResponse,
     ReviewLineRequest,
     StaleCaptureResponse,
     SubmitCaptureRequest,
@@ -65,10 +68,12 @@ from app.services.capture_service import (
     InvalidReviewError,
     LineDecision,
     NoOrderLinesError,
+    PossibleDuplicateCaptureError,
     RetailerInactiveError,
     RetailerNotFoundError,
     StaleCaptureVersionError,
 )
+from app.services.gemini_interpreter import configured_interpreter
 from app.services.retailer_order_service import (
     IdempotencyConflictError,
     RetailerNotOrderableError,
@@ -140,6 +145,32 @@ def _error_response(error: Exception) -> JSONResponse | None:
         )
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT, content=body.model_dump()
+        )
+    if isinstance(error, PossibleDuplicateCaptureError):
+        body = PossibleDuplicateResponse(
+            detail=str(error),
+            duplicates=[
+                PossibleDuplicateCapture(
+                    capture_id=duplicate.capture_id,
+                    created_at=duplicate.created_at,
+                    status=duplicate.status,
+                    order=(
+                        CaptureOrderLink(
+                            id=duplicate.order_id,
+                            order_number=duplicate.order_number,
+                            status=OrderStatus(duplicate.order_status),
+                        )
+                        if duplicate.order_id is not None
+                        and duplicate.order_number is not None
+                        and duplicate.order_status is not None
+                        else None
+                    ),
+                )
+                for duplicate in error.duplicates
+            ],
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT, content=body.model_dump(mode="json")
         )
     if isinstance(error, AliasConflictError):
         body = AliasConflictResponse(
@@ -226,8 +257,13 @@ def _rolled_back(db: DbSession, error: Exception) -> JSONResponse | None:
         **_AUTH,
         404: {"model": ErrorResponse, "description": "Retailer not found."},
         409: {
-            "model": ErrorResponse,
-            "description": "Retailer inactive, or client_request_id reused.",
+            "model": PossibleDuplicateResponse,
+            "description": (
+                "Retailer inactive, client_request_id reused, or (order desk) a "
+                "possible duplicate: an equivalent message for this retailer "
+                "from the last 24 hours. Resend with allow_duplicate to create "
+                "it anyway."
+            ),
         },
         422: {"model": ErrorResponse, "description": "Invalid or empty message."},
     },
@@ -237,6 +273,7 @@ def create_capture(
     response: Response,
     actor: Actor,
     db: DbSession,
+    settings: AppSettings,
 ) -> CaptureDetail | JSONResponse:
     try:
         result = capture_service.create_capture(
@@ -245,6 +282,10 @@ def create_capture(
             message=payload.message,
             client_request_id=payload.client_request_id,
             retailer_id=payload.retailer_id,
+            allow_duplicate=payload.allow_duplicate,
+            # This application's settings, not the process-wide ones: rules
+            # by default, Gemini (with its rules fallback) when configured.
+            interpreter=configured_interpreter(settings),
         )
     except Exception as error:
         failure = _rolled_back(db, error)

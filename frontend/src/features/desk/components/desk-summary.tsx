@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -13,16 +13,27 @@ import { EXPORTS_PATH } from "@/features/exports/paths";
 import type { OrderStatus } from "@/features/orders/status";
 import { cn } from "@/lib/utils";
 
-import { deskKeys, fetchQueuePage } from "../api";
+import { deskKeys, deskQueueOptions, type QueueFilters } from "../api";
 
-const NO_FILTERS = { search: "", retailerId: null, createdFrom: null, createdTo: null };
+const NO_FILTERS: Omit<QueueFilters, "status"> = {
+  search: "",
+  retailerId: null,
+  createdFrom: null,
+  createdTo: null,
+};
 
 function useOrderCount(status: OrderStatus) {
+  const queryClient = useQueryClient();
   return useQuery({
-    // Under deskKeys.all, so it refreshes whenever the desk's orders change.
+    // Its own key, under deskKeys.all, so it refreshes whenever the desk's
+    // orders change (unchanged invalidation).
     queryKey: [...deskKeys.all, "count", status],
-    queryFn: async ({ signal }) =>
-      (await fetchQueuePage({ ...NO_FILTERS, status }, 0, signal)).total,
+    // Fetched through the queue's own query (same key and first page): when
+    // the queue shows this status unfiltered, as the overview does for
+    // pending orders, the two share one request instead of sending two.
+    queryFn: async () =>
+      (await queryClient.fetchInfiniteQuery(deskQueueOptions({ ...NO_FILTERS, status }))).pages[0]!
+        .total,
   });
 }
 

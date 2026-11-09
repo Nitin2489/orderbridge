@@ -1,4 +1,5 @@
 import {
+  infiniteQueryOptions,
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
@@ -124,14 +125,18 @@ export function nextQueueOffset(page: DeskOrderPage): number | undefined {
   return page.items.length > 0 && next < page.total ? next : undefined;
 }
 
-export function useDeskQueue(filters: QueueFilters) {
-  return useInfiniteQuery({
+/** The queue's query, shared by the queue and the desk summary's counts. */
+export function deskQueueOptions(filters: QueueFilters) {
+  return infiniteQueryOptions({
     queryKey: deskKeys.list(filters),
     queryFn: ({ pageParam, signal }) => fetchQueuePage(filters, pageParam, signal),
     initialPageParam: 0,
     getNextPageParam: nextQueueOffset,
-    placeholderData: keepPreviousData,
   });
+}
+
+export function useDeskQueue(filters: QueueFilters) {
+  return useInfiniteQuery({ ...deskQueueOptions(filters), placeholderData: keepPreviousData });
 }
 
 export function useDeskOrder(orderId: string) {

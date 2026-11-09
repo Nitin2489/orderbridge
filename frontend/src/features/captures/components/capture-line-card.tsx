@@ -1,6 +1,12 @@
 "use client";
 
-import { CircleAlertIcon, CircleCheckIcon, CircleSlashIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CircleSlashIcon,
+} from "lucide-react";
 import { useId, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +67,7 @@ function ProductOption({
   suggested,
   disabled,
   onChange,
+  showReasons,
 }: {
   candidate: Candidate;
   name: string;
@@ -68,6 +75,8 @@ function ProductOption({
   suggested: boolean;
   disabled: boolean;
   onChange: () => void;
+  /** The detailed matching reasons (behind "Show alternatives"). */
+  showReasons: boolean;
 }) {
   return (
     <label
@@ -105,7 +114,7 @@ function ProductOption({
             {formatCount(candidate.stock_cases)} {candidate.stock_cases === 1 ? "case" : "cases"} in stock
           </span>
         ) : null}
-        {candidate.reasons.length > 0 ? (
+        {showReasons && candidate.reasons.length > 0 ? (
           <span className="text-xs text-muted-foreground">{candidate.reasons.join(" ")}</span>
         ) : null}
       </span>
@@ -132,9 +141,19 @@ export function CaptureLineCard({
       candidate !== null && all.findIndex((c) => c?.product_id === candidate.product_id) === index,
   );
 
+  // Alternatives and detailed reasons start collapsed, so a long message
+  // stays short on a phone. With no suggestion, every option is shown: the
+  // reviewer has to choose one.
+  const [expanded, setExpanded] = useState(false);
+  const showAll = expanded || proposal === null;
+
   const [productId, setProductId] = useState<string | null>(
     line.selected_product?.id ?? proposal?.product_id ?? null,
   );
+  // Always visible: the suggestion and whatever the reviewer has selected.
+  const isPrimary = (candidate: Candidate) =>
+    candidate.product_id === proposal?.product_id || candidate.product_id === productId;
+  const hiddenCount = options.filter((candidate) => !isPrimary(candidate)).length;
   const [quantity, setQuantity] = useState(
     line.suggested_quantity ? String(line.suggested_quantity) : "",
   );
@@ -285,7 +304,7 @@ export function CaptureLineCard({
 
       {!resolved ? (
         <>
-          <fieldset className="flex flex-col gap-2" disabled={disabled}>
+          <fieldset id={`${id}-products`} className="flex flex-col gap-2" disabled={disabled}>
             <legend className="mb-1 text-sm font-semibold">Product</legend>
             {line.match.reasons.length > 0 ? (
               <p className="text-sm text-muted-foreground">{line.match.reasons.join(" ")}</p>
@@ -293,23 +312,49 @@ export function CaptureLineCard({
             {options.length === 0 ? (
               <p className="text-sm text-muted-foreground">No products to choose from.</p>
             ) : (
-              options.map((candidate) => (
-                <ProductOption
-                  key={candidate.product_id}
-                  candidate={candidate}
-                  name={`${id}-product`}
-                  checked={productId === candidate.product_id}
-                  suggested={proposal?.product_id === candidate.product_id}
-                  disabled={disabled}
-                  onChange={() => setProductId(candidate.product_id)}
-                />
-              ))
+              options
+                .filter((candidate) => showAll || isPrimary(candidate))
+                .map((candidate) => (
+                  <ProductOption
+                    key={candidate.product_id}
+                    candidate={candidate}
+                    name={`${id}-product`}
+                    checked={productId === candidate.product_id}
+                    suggested={proposal?.product_id === candidate.product_id}
+                    disabled={disabled}
+                    onChange={() => setProductId(candidate.product_id)}
+                    showReasons={expanded}
+                  />
+                ))
             )}
+            {proposal !== null && options.length > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-11 w-fit px-2 text-primary"
+                aria-expanded={expanded}
+                aria-controls={`${id}-products`}
+                onClick={() => setExpanded((open) => !open)}
+              >
+                {expanded ? (
+                  <ChevronUpIcon aria-hidden="true" />
+                ) : (
+                  <ChevronDownIcon aria-hidden="true" />
+                )}
+                {expanded
+                  ? "Hide alternatives"
+                  : hiddenCount > 0
+                    ? `Show alternatives (${hiddenCount})`
+                    : "Show match details"}
+              </Button>
+            ) : null}
           </fieldset>
 
           <section aria-labelledby={`${id}-quantity`} className="flex flex-col gap-2">
             <h4 id={`${id}-quantity`} className="text-sm font-semibold">
               Quantity
+              {/* Each line's section and field get a distinct accessible name. */}
+              <span className="sr-only"> for line {line.line_number}</span>
             </h4>
             {line.unit.confirmed && line.unit.unit && line.unit.quantity !== null ? (
               <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -334,7 +379,9 @@ export function CaptureLineCard({
                 <p className="text-sm text-muted-foreground">{unitHintText(line)}</p>
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex flex-col gap-1">
-                    <Label htmlFor={`${id}-qty`}>Quantity</Label>
+                    <Label htmlFor={`${id}-qty`}>
+                      Quantity<span className="sr-only"> for line {line.line_number}</span>
+                    </Label>
                     <Input
                       id={`${id}-qty`}
                       inputMode="numeric"

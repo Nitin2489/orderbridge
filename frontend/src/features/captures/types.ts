@@ -83,6 +83,7 @@ export const captureDetailSchema = z.object({
     kind: z.string(),
     is_ai_model: z.boolean(),
     description: z.string(),
+    fallback_note: z.string().nullable().optional(),
   }),
   retailer: z.object({ id: z.string(), business_name: z.string() }),
   original_message: z.string(),
@@ -161,6 +162,23 @@ export const aliasConflictSchema = z.object({
   alias_text: z.string(),
   current_product_id: z.string(),
 });
+
+/** 409 on create (order desk): an equivalent message was captured recently. */
+export const possibleDuplicateSchema = z.object({
+  detail: z.string(),
+  code: z.literal("possible_duplicate"),
+  duplicates: z.array(
+    z.object({
+      capture_id: z.string(),
+      created_at: z.string(),
+      status: z.enum(CAPTURE_STATUSES),
+      order: z
+        .object({ id: z.string(), order_number: z.string(), status: z.string() })
+        .nullable(),
+    }),
+  ),
+});
+export type PossibleDuplicate = z.infer<typeof possibleDuplicateSchema>["duplicates"][number];
 
 export type Candidate = z.infer<typeof candidateSchema>;
 export type CaptureLine = z.infer<typeof captureLineSchema>;

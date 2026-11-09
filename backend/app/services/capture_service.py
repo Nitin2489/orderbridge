@@ -3,8 +3,9 @@
 Workflow
 --------
 1. create_capture(): keep the message exactly as received, run the
-   interpreter (Phase A: the deterministic RulesInterpreter, not an AI
-   model) and the deterministic matcher, and store every line as a pending
+   interpreter (the deterministic RulesInterpreter by default, or the
+   Gemini language model when configured, which falls back to the rules)
+   and the deterministic matcher, and store every line as a pending
    proposal. A message with no order lines is refused and nothing is stored.
 2. review_line(): a person decides each line. Unit and product are
    independent decisions: confirming a product never confirms its unit, and
@@ -44,7 +45,7 @@ any point leaves no order, link, alias or status change behind.
 
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -73,9 +74,9 @@ from app.models.capture import (
     MIN_REASON_LENGTH,
 )
 from app.services.capture_interpreter import (
+    CatalogueEntry,
     ExtractedLine,
     MessageInterpreter,
-    RulesInterpreter,
 )
 from app.services.capture_matcher import (
     LineMatch,
@@ -83,6 +84,7 @@ from app.services.capture_matcher import (
     match_extraction,
 )
 from app.services.capture_text import normalize_phrase
+from app.services.gemini_interpreter import configured_interpreter
 from app.services.order_service import LineIssueCode
 from app.services.retailer_order_service import (
     OrderLineInput,
@@ -135,6 +137,38 @@ class NoOrderLinesError(CaptureError):
 
 class CaptureRequestConflictError(CaptureError):
     """The client_request_id was already used for a different capture."""
+
+
+#: How far back the order desk is warned about an identical message.
+DUPLICATE_WINDOW = timedelta(hours=24)
+#: At most this many earlier captures are listed in the warning.
+MAX_DUPLICATES_LISTED = 5
+
+
+@dataclass(frozen=True)
+class PossibleDuplicate:
+    """An earlier capture of the same retailer with an equivalent message."""
+
+    capture_id: UUID
+    created_at: datetime
+    status: CaptureStatus
+    order_id: UUID | None
+    order_number: str | None
+    order_status: str | None
+
+
+class PossibleDuplicateCaptureError(CaptureError):
+    """The order desk is capturing a message this retailer's recent capture
+    already holds. Nothing was stored; resend with allow_duplicate to create
+    it anyway (a genuine repeat order)."""
+
+    def __init__(self, duplicates: tuple[PossibleDuplicate, ...]) -> None:
+        self.duplicates = duplicates
+        super().__init__(
+            "This retailer already has a capture with the same message from the "
+            "last 24 hours. Check it, or create this one anyway if it is a "
+            "separate order."
+        )
 
 
 class StaleCaptureVersionError(CaptureError):
@@ -520,6 +554,57 @@ def _changed(capture: OrderCapture) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _recent_duplicates(
+    session: Session, retailer_id: UUID, message: str, now: datetime
+) -> tuple[PossibleDuplicate, ...]:
+    """This retailer's captures from the last DUPLICATE_WINDOW whose message
+    is equivalent (same words and numbers, ignoring case, spacing,
+    punctuation and digit script). Discarded captures are not listed: they
+    never became orders. Newest first."""
+    target = normalize_phrase(message)
+    if not target:
+        return ()
+    rows = session.execute(
+        select(
+            OrderCapture.id,
+            OrderCapture.created_at,
+            OrderCapture.status,
+            OrderCapture.original_message,
+            Order.id,
+            Order.order_number,
+            Order.status,
+        )
+        .outerjoin(Order, Order.id == OrderCapture.order_id)
+        .where(
+            OrderCapture.retailer_id == retailer_id,
+            OrderCapture.created_at >= now - DUPLICATE_WINDOW,
+            OrderCapture.status != CaptureStatus.DISCARDED,
+        )
+        .order_by(OrderCapture.created_at.desc(), OrderCapture.id)
+    ).all()
+    matches = [
+        PossibleDuplicate(
+            capture_id=capture_id,
+            created_at=created_at,
+            status=CaptureStatus(capture_status),
+            order_id=order_id,
+            order_number=order_number,
+            order_status=str(order_status) if order_status is not None else None,
+        )
+        for (
+            capture_id,
+            created_at,
+            capture_status,
+            original,
+            order_id,
+            order_number,
+            order_status,
+        ) in rows
+        if normalize_phrase(original) == target
+    ]
+    return tuple(matches[:MAX_DUPLICATES_LISTED])
+
+
 def create_capture(
     session: Session,
     actor: CaptureActor,
@@ -528,6 +613,7 @@ def create_capture(
     client_request_id: UUID,
     retailer_id: UUID | None = None,
     interpreter: MessageInterpreter | None = None,
+    allow_duplicate: bool = False,
     now: datetime | None = None,
 ) -> CaptureResult:
     """Store a message and its proposed lines, or return the identical
@@ -538,6 +624,12 @@ def create_capture(
     RetailerNotFoundError, RetailerInactiveError, CaptureRequestConflictError,
     NoOrderLinesError, or the interpreter's InvalidMessageError /
     TooManyLinesError. Nothing is stored on any error.
+
+    For the order desk, a message equivalent to one this retailer's captures
+    already holds from the last 24 hours raises PossibleDuplicateCaptureError
+    (checked after the idempotent replay, so a retried request still returns
+    its capture), unless allow_duplicate confirms it is a separate order.
+    Retailers capture their own messages and are not checked.
     """
     if actor.is_desk:
         if retailer_id is None:
@@ -577,10 +669,26 @@ def create_capture(
     if not retailer.is_active:
         raise RetailerInactiveError("This retailer account is inactive.")
 
-    extraction = (interpreter or RulesInterpreter()).extract(message)
+    now = now or _utcnow()
+    if actor.is_desk and not allow_duplicate:
+        duplicates = _recent_duplicates(session, retailer.id, message, now)
+        if duplicates:
+            # Before interpreting: nothing is stored and no AI call is made.
+            raise PossibleDuplicateCaptureError(duplicates)
+
+    context = load_matching_context(session, retailer.id)
+    # Only product codes and names are offered to an interpreter: never
+    # prices, stock, the retailer, its aliases or its order history.
+    catalogue = tuple(
+        CatalogueEntry(sku=product.sku, name=product.name)
+        for product in context.products
+    )
+    extraction = (interpreter or configured_interpreter()).extract(
+        message, catalogue=catalogue
+    )
     if not extraction.lines:
         raise NoOrderLinesError("No order lines were found in this message.")
-    matches = match_extraction(extraction, load_matching_context(session, retailer.id))
+    matches = match_extraction(extraction, context)
 
     capture = OrderCapture(
         id=uuid4(),
@@ -594,7 +702,7 @@ def create_capture(
         version=1,
         client_request_id=client_request_id,
         request_fingerprint=fingerprint,
-        created_at=now or _utcnow(),
+        created_at=now,
         lines=[
             _new_line(line, match)
             for line, match in zip(extraction.lines, matches, strict=True)

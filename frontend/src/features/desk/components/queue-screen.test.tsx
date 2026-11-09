@@ -39,6 +39,11 @@ describe("QueueScreen", () => {
     const link = await screen.findByRole("link", { name: "OB-2026-000123" });
 
     expect(link).toHaveAttribute("href", `/desk/orders/${first.id}`);
+    // A 44 px tap area around the order number; the retailer filter below it
+    // stays on top for its own box and is at least 24 px tall.
+    expect(link).toHaveClass("tap-target");
+    const filter = screen.getByRole("button", { name: /show only this retailer/ });
+    expect(filter).toHaveClass("relative", "min-h-6");
     expect(lastQuery()?.get("status")).toBe("pending_review");
     expect(lastQuery()?.get("limit")).toBe("50");
     expect(lastQuery()?.get("offset")).toBe("0");
@@ -51,6 +56,15 @@ describe("QueueScreen", () => {
         name: "Pending review",
       }),
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("wraps the status chips so every status stays reachable on a phone", async () => {
+    renderQueue(page([first]));
+    await screen.findByRole("link", { name: "OB-2026-000123" });
+
+    const filters = screen.getByRole("group", { name: "Filter by status" });
+    expect(filters).toHaveClass("flex-wrap");
+    expect(filters).not.toHaveClass("overflow-x-auto");
   });
 
   it("labels confirmed totals as confirmed", async () => {

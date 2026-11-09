@@ -103,6 +103,16 @@ describe("OrdersScreen", () => {
     expect(screen.queryByRole("button", { name: "Show more orders" })).not.toBeInTheDocument();
   });
 
+  it("wraps the status chips so every status stays reachable on a phone", async () => {
+    renderOrders(json(200, makeOrderPage([pending])));
+    await screen.findByRole("link", { name: /OB-2026-000123/ });
+
+    const filters = screen.getByRole("group", { name: "Filter by status" });
+    expect(filters).toHaveClass("flex-wrap");
+    expect(filters).not.toHaveClass("overflow-x-auto");
+    expect(within(filters).getAllByRole("button")).toHaveLength(6);
+  });
+
   it("filters by status and offers no draft filter", async () => {
     const { user, lastQuery } = renderOrders((request: RecordedRequest) =>
       request.query.get("status") === "confirmed"

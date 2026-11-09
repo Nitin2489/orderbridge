@@ -91,6 +91,23 @@ function fingerprints(backend: Awaited<ReturnType<typeof renderReview>>["backend
 }
 
 describe("OrderReviewScreen: detail and preview", () => {
+  it("links to the original message when the order came from a capture", async () => {
+    const captureId = "6c1f0e3a-9b2d-4f6e-8a1b-123456789abc";
+    await renderReview({
+      [DETAIL]: json(200, makeDeskDetail({ source: "ai_text", capture_id: captureId })),
+    });
+
+    const link = await screen.findByRole("link", { name: "View original message" });
+    expect(link).toHaveAttribute("href", `/desk/captures/${captureId}`);
+  });
+
+  it("shows no message link for an order placed in the app", async () => {
+    await renderReview({ [DETAIL]: json(200, makeDeskDetail({ capture_id: null })) });
+
+    expect(await screen.findByRole("heading", { name: /Order OB-/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "View original message" })).not.toBeInTheDocument();
+  });
+
   it("shows the order, the retailer's credit, current pricing and history", async () => {
     const { backend } = await renderReview();
 
@@ -468,6 +485,8 @@ describe("OrderReviewScreen: reject", () => {
     await user.click(await screen.findByRole("button", { name: "Reject order" }));
     const field = screen.getByLabelText("Reason for rejection");
     expect(field).toHaveFocus();
+    // The desk is told the reason is shown to the retailer.
+    expect(field).toHaveAccessibleDescription(/The retailer will see this reason\./);
     await user.type(field, "  ab  ");
     await user.click(screen.getByRole("button", { name: "Reject order" }));
 

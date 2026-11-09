@@ -35,9 +35,10 @@ export function ProductCard({ product }: { product: CatalogueProduct }) {
         <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           {product.brand} · {product.category}
         </p>
-        <h3 id={headingId} className="mt-1 text-base leading-snug font-semibold text-balance">
+        {/* h2: the page's h1 is "Catalogue"; same look as before. */}
+        <h2 id={headingId} className="mt-1 text-base leading-snug font-semibold text-balance">
           {product.name}
-        </h3>
+        </h2>
         <p className="mt-1 font-mono text-xs text-muted-foreground">
           <span className="sr-only">SKU </span>
           {product.sku}

@@ -192,6 +192,13 @@ export function CartScreen() {
         <p className="mt-1 text-sm text-muted-foreground" role="status" aria-live="polite">
           {count === 0 ? "No products yet." : `${count} ${count === 1 ? "product" : "products"}`}
         </p>
+        {cart.unrestoredCount > 0 ? (
+          <p className="mt-2 text-sm font-medium" role="alert">
+            {cart.unrestoredCount === 1
+              ? "1 product from your saved cart is no longer available and was removed."
+              : `${cart.unrestoredCount} products from your saved cart are no longer available and were removed.`}
+          </p>
+        ) : null}
       </div>
 
       {count === 0 ? (

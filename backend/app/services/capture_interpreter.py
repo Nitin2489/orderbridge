@@ -5,10 +5,12 @@ message, which words name the product, and what quantity, unit and pack
 sizes the words suggest. It never chooses a SKU (the matcher does), never
 prices anything, never confirms a unit and never touches the database.
 
-Interpreters are replaceable behind MessageInterpreter. Phase A has only
-RulesInterpreter: deterministic, hand-written rules. **It is not an AI
-model**; its kind is InterpreterKind.RULES and its name "rules@1". A future
-language-model interpreter must return the same validated Extraction.
+Interpreters are replaceable behind MessageInterpreter. RulesInterpreter
+uses deterministic, hand-written rules. **It is not an AI model**; its kind
+is InterpreterKind.RULES and its name "rules@1". The optional Gemini
+interpreter (app.services.gemini_interpreter) is a language model; it must
+return the same validated Extraction, grounded in the message, and falls
+back to the rules whenever its answer cannot be used.
 
 Original text is never modified. Every span in an Extraction is checked
 against the message it came from: span.text must equal
@@ -17,9 +19,10 @@ message[span.start:span.end]. Parts of a message that are not order lines
 with a reason, never dropped silently.
 """
 
+from collections.abc import Sequence
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -50,7 +53,20 @@ class InterpreterKind(StrEnum):
     """What produced an extraction, so the UI can say so plainly."""
 
     RULES = "rules"  # deterministic rules; not an AI model
-    LANGUAGE_MODEL = "language_model"  # reserved for Phase B; not implemented
+    LANGUAGE_MODEL = "language_model"  # e.g. Gemini; see gemini_interpreter
+
+
+#: Why a language-model reading was not used and the rules were used instead.
+#: Stored with the extraction; never contains provider error details.
+AiFallback = Literal["unavailable", "timeout", "invalid_output", "incomplete", "empty"]
+
+
+class CatalogueEntry(NamedTuple):
+    """The only product information an interpreter may see: code and name.
+    Never prices, stock, retailers or order history."""
+
+    sku: str
+    name: str
 
 
 class InvalidMessageError(ValueError):
@@ -118,6 +134,10 @@ class ExtractedLine(BaseModel):
     sizes: tuple[SizeMention, ...] = ()
     # Plain-language observations for the reviewer.
     notes: tuple[str, ...] = ()
+    # A language model's catalogue code for this line, already checked to
+    # exist in the catalogue it was shown. Only a weak matching signal (see
+    # capture_matcher); the rules interpreter never sets it.
+    suggested_sku: str | None = Field(default=None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def _parts_inside_line(self) -> "ExtractedLine":
@@ -143,6 +163,10 @@ class Extraction(BaseModel):
     message: str
     lines: tuple[ExtractedLine, ...]
     ignored: tuple[IgnoredSpan, ...] = ()
+    # The provider's model name, for a language-model extraction.
+    model: str | None = Field(default=None, max_length=64)
+    # Set when a language model was configured but the rules were used.
+    ai_fallback: AiFallback | None = None
 
     @model_validator(mode="after")
     def _spans_match_message(self) -> "Extraction":
@@ -175,12 +199,18 @@ class Extraction(BaseModel):
 
 class MessageInterpreter(Protocol):
     """Turns a message into proposed lines. Implementations must be pure
-    with respect to the database and must return a validated Extraction."""
+    with respect to the database and must return a validated Extraction.
+
+    `catalogue` lists the active products (code and name only) for an
+    interpreter that suggests catalogue codes; others ignore it.
+    """
 
     name: str
     kind: InterpreterKind
 
-    def extract(self, message: str) -> Extraction: ...
+    def extract(
+        self, message: str, *, catalogue: Sequence[CatalogueEntry] = ()
+    ) -> Extraction: ...
 
 
 # ---------------------------------------------------------------------------
@@ -437,5 +467,7 @@ class RulesInterpreter:
     name = RULES_INTERPRETER_NAME
     kind = InterpreterKind.RULES
 
-    def extract(self, message: str) -> Extraction:
+    def extract(
+        self, message: str, *, catalogue: Sequence[CatalogueEntry] = ()
+    ) -> Extraction:
         return extract_lines(message)

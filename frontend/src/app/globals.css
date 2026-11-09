@@ -53,7 +53,7 @@
 }
 
 @theme inline {
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter-rupee), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -78,6 +78,24 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+}
+
+/*
+ * Enlarges a small text link's tap area to at least 44x44 px (centred on
+ * it) without changing how it looks or its layout. The invisible ::after
+ * belongs to the link, so taps on it activate the link.
+ */
+@utility tap-target {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
 }
 
 @layer base {

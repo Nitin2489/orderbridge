@@ -45,6 +45,7 @@ export interface CartState {
 
 export type CartAction =
   | { type: "reset"; ownerId: string | null }
+  | { type: "restore"; ownerId: string; lines: CartLine[]; notes: string }
   | { type: "add"; product: CatalogueProduct; quantity?: number }
   | { type: "setQuantity"; productId: string; quantity: number }
   | { type: "remove"; productId: string }
@@ -83,6 +84,20 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
   switch (action.type) {
     case "reset":
       return emptyCart(action.ownerId);
+
+    case "restore":
+      // A saved cart only ever fills this retailer's still-empty cart: never
+      // another retailer's, and never over products added meanwhile.
+      if (state.ownerId !== action.ownerId || state.lines.length > 0 || state.notes !== "") {
+        return state;
+      }
+      return {
+        ...state,
+        lines: action.lines
+          .slice(0, MAX_ORDER_LINES)
+          .map((line) => ({ product: line.product, quantity: clampQuantity(line.quantity) })),
+        notes: action.notes.slice(0, MAX_NOTES_LENGTH),
+      };
 
     case "add": {
       if (unorderableReason(action.product)) {

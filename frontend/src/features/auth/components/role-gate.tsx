@@ -8,6 +8,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { SIGN_IN_PATH, workspaceFor, type UserRole } from "../roles";
 import { useSession } from "../session-provider";
 import { AccessDenied } from "./access-denied";
+import { SessionCheckLoading } from "./session-check-loading";
 import { SessionError } from "./session-error";
 
 /**
@@ -30,7 +31,7 @@ export function RoleGate({ role, children }: { role: UserRole; children: ReactNo
 
   switch (session.status) {
     case "loading":
-      return <LoadingState label="Checking your session…" />;
+      return <SessionCheckLoading />;
     case "error":
       return <SessionError />;
     case "unauthenticated":

@@ -40,9 +40,22 @@ function backendOrigin(): string {
   return url.origin;
 }
 
+/**
+ * Security headers on every frontend response: no framing (clickjacking),
+ * no MIME sniffing, and only the origin sent as the referrer cross-site.
+ */
+export const SECURITY_HEADERS = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  async headers() {
+    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+  },
   async rewrites() {
     return [
       {

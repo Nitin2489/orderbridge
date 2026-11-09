@@ -5,6 +5,7 @@ import {
   ArrowLeftIcon,
   CircleCheckIcon,
   CirclePauseIcon,
+  MessageSquareTextIcon,
   SearchXIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -23,6 +24,7 @@ import {
   formatRupees,
   parseOffsetTimestamp,
 } from "@/features/catalogue/format";
+import { capturePath } from "@/features/captures/paths";
 import { exportBatchPath, isBatchId } from "@/features/exports/paths";
 import { OrderStatusBadge } from "@/features/orders/components/order-status-badge";
 import { isOrderId } from "@/features/orders/paths";
@@ -52,7 +54,7 @@ function BackToQueue() {
   return (
     <Link
       href={DESK_PATH}
-      className="inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="tap-target inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <ArrowLeftIcon className="size-4" aria-hidden="true" />
       Order queue
@@ -353,6 +355,15 @@ function OrderReview({ order, sessionUserId }: { order: DeskOrderDetail; session
         <p className="text-sm text-muted-foreground">
           {order.retailer.business_name} · Placed {placed} · {sourceLabel(order.source)}
         </p>
+        {order.capture_id ? (
+          <Link
+            href={capturePath("order_desk", order.capture_id)}
+            className="tap-target inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <MessageSquareTextIcon className="size-4" aria-hidden="true" />
+            View original message
+          </Link>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <OrderStatusBadge status={order.status} />
           {order.status === "on_hold" ? (

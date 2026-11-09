@@ -8,6 +8,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { workspaceFor } from "../roles";
 import { useSession } from "../session-provider";
 import { AccessDenied } from "./access-denied";
+import { SessionCheckLoading } from "./session-check-loading";
 import { SignInFlow } from "./sign-in-flow";
 
 /**
@@ -27,7 +28,7 @@ export function SignInScreen() {
   }, [workspace, router]);
 
   if (session.status === "loading") {
-    return <LoadingState label="Checking your session…" />;
+    return <SessionCheckLoading />;
   }
   if (session.status === "authenticated") {
     return workspace ? (

@@ -91,8 +91,8 @@ export function RejectAction({ orderNumber, disabled, pending, retry, onReject }
           className="w-full rounded-md border border-input bg-card px-3 py-2 text-base shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 aria-invalid:border-destructive"
         />
         <p id="reject-reason-hint" className="text-xs text-muted-foreground">
-          {REJECTION_REASON_MIN_LENGTH} to {REJECTION_REASON_MAX_LENGTH} characters ·{" "}
-          {trimmed.length} entered
+          The retailer will see this reason. {REJECTION_REASON_MIN_LENGTH} to{" "}
+          {REJECTION_REASON_MAX_LENGTH} characters · {trimmed.length} entered
         </p>
         <FormMessage id="reject-reason-error">
           {showError && !valid

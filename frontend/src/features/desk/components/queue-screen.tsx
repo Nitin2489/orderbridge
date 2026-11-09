@@ -85,14 +85,14 @@ function QueueRow({
       <div className="flex flex-col gap-1">
         <Link
           href={deskOrderPath(order.id)}
-          className="w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="tap-target w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           {order.order_number}
         </Link>
         <button
           type="button"
           onClick={() => onRetailer({ id: order.retailer_id, name: order.retailer_business_name })}
-          className="w-fit rounded-sm text-left text-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="relative inline-flex min-h-6 w-fit items-center rounded-sm text-left text-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           {order.retailer_business_name}
           <span className="sr-only">: show only this retailer&apos;s orders</span>
@@ -296,7 +296,9 @@ export function QueueScreen({
         <div
           role="group"
           aria-label="Filter by status"
-          className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
+          // Wraps at every width, so on a 320 px phone every status is visible
+          // and tappable (a sideways-scrolling row hid the last ones).
+          className="flex flex-wrap gap-2 pb-1"
         >
           <Chip label="All" pressed={status === null} onClick={() => setStatus(null)} />
           {FILTERABLE_STATUSES.map((value) => (

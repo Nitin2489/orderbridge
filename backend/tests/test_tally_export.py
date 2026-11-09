@@ -12,6 +12,7 @@ import csv
 import hashlib
 import io
 import re
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -297,7 +298,7 @@ BASE_TIME = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 BATCH_NUMBER = re.compile(r"EX-\d{4}-\d{6,}")
 
 
-def make_settings() -> Settings:
+def make_settings(**overrides) -> Settings:
     return Settings(
         _env_file=None,
         app_env="testing",
@@ -306,14 +307,27 @@ def make_settings() -> Settings:
         auth_session_cookie_secure=False,
         auth_debug_otp=False,
         frontend_origins=[TRUSTED_ORIGIN],
+        **overrides,
     )
 
 
+#: Tally ledger names for these tests only (configured per deployment).
+TALLY = {
+    "tally_sales_ledger_name": "Test Sales",
+    "tally_discount_ledger_name": "Test Discount",
+}
+
+
 @pytest.fixture
-def client(db_session):
+def client_settings() -> Settings:
+    return make_settings(**TALLY)
+
+
+@pytest.fixture
+def client(db_session, client_settings):
     seed_all(db_session)
     db_session.commit()
-    app = create_app(make_settings(), otp_delivery=InMemoryOtpDelivery())
+    app = create_app(client_settings, otp_delivery=InMemoryOtpDelivery())
 
     def override_get_db():
         yield db_session
@@ -458,6 +472,8 @@ def _requests():
         ("get", EXPORTS, {}),
         ("get", f"{EXPORTS}/{batch_id}", {}),
         ("get", f"{EXPORTS}/{batch_id}/csv", {}),
+        ("get", f"{EXPORTS}/{batch_id}/tally.xml", {}),
+        ("get", f"{EXPORTS}/{batch_id}/tally-masters", {}),
     ]
 
 
@@ -787,3 +803,103 @@ def test_failed_export_rolls_back_every_change(
         assert status_of(db_session, order.id) == OrderStatus.CONFIRMED
         assert db_session.get(Order, order.id).export_batch_id is None
         assert exported_events(db_session, order.id) == []
+
+
+# ---------------------------------------------------------------------------
+# TallyPrime XML download and masters
+# ---------------------------------------------------------------------------
+
+
+def test_tally_xml_download_matches_the_stored_batch(desk, db_session, two_confirmed):
+    body = export(desk).json()
+    batch = db_session.get(ExportBatch, UUID(body["id"]))
+    url = f"{EXPORTS}/{body['id']}/tally.xml"
+
+    download = desk.get(url)
+
+    assert download.status_code == 200
+    assert download.headers["content-type"] == "application/xml; charset=utf-8"
+    assert download.headers["content-disposition"] == (
+        f'attachment; filename="orderbridge-tally-{body["batch_number"]}.xml"'
+    )
+    assert download.headers["cache-control"] == "no-store"
+    assert download.headers["x-content-sha256"] == (
+        hashlib.sha256(download.content).hexdigest()
+    )
+    root = ET.fromstring(download.content)
+    vouchers = root.findall("./BODY/DATA/TALLYMESSAGE/VOUCHER")
+    assert len(vouchers) == batch.order_count == 2
+    for voucher in vouchers:
+        total = sum(
+            Decimal(entry.findtext("AMOUNT"))
+            for entry in voucher.findall("LEDGERENTRIES.LIST")
+            + voucher.findall("ALLINVENTORYENTRIES.LIST")
+        )
+        assert total == 0
+    # Downloading again gives the same bytes and changes nothing.
+    assert desk.get(url).content == download.content
+    assert batch.csv_sha256 == body["csv_sha256"]
+
+
+def test_tally_masters_list_the_names_the_vouchers_use(desk, two_confirmed):
+    body = export(desk).json()
+
+    masters = desk.get(f"{EXPORTS}/{body['id']}/tally-masters")
+
+    assert masters.status_code == 200
+    assert masters.json() == {
+        "batch_number": body["batch_number"],
+        "voucher_type": "Sales",
+        "sales_ledger": "Test Sales",
+        "discount_ledger": "Test Discount",
+        "discount_needed": True,
+        "party_ledgers": ["Gupta Kirana Store", "Sharma General Store"],
+        "stock_items": [
+            {"name": "Detergent Powder 1kg", "unit": "case"},
+            {"name": "Glucose Biscuit 75g", "unit": "case"},
+        ],
+        "units": ["case"],
+        "missing_settings": [],
+        "xml_url": f"{EXPORTS}/{body['id']}/tally.xml",
+    }
+
+
+@pytest.mark.parametrize("client_settings", [make_settings()], ids=["unconfigured"])
+def test_tally_xml_without_ledger_names_explains_and_csv_still_works(
+    desk, two_confirmed, client_settings
+):
+    body = export(desk).json()
+
+    xml = desk.get(f"{EXPORTS}/{body['id']}/tally.xml")
+    assert xml.status_code == 409
+    assert "TALLY_SALES_LEDGER_NAME" in xml.json()["detail"]
+    assert "TALLY_DISCOUNT_LEDGER_NAME" in xml.json()["detail"]
+
+    masters = desk.get(f"{EXPORTS}/{body['id']}/tally-masters").json()
+    assert masters["missing_settings"] == [
+        "TALLY_SALES_LEDGER_NAME",
+        "TALLY_DISCOUNT_LEDGER_NAME",
+    ]
+    assert desk.get(body["csv_url"]).status_code == 200
+
+
+def test_tally_endpoints_404_for_an_unknown_batch(desk):
+    assert desk.get(f"{EXPORTS}/{uuid4()}/tally.xml").status_code == 404
+    assert desk.get(f"{EXPORTS}/{uuid4()}/tally-masters").status_code == 404
+
+
+def test_tally_endpoints_refuse_a_name_xml_cannot_hold(desk, db_session, two_confirmed):
+    body = export(desk).json()
+    batch = db_session.get(ExportBatch, UUID(body["id"]))
+    # A retailer name with a control character, as an old batch might hold.
+    batch.csv_content = batch.csv_content.replace(
+        "Sharma General Store", "Sharma\x01General Store"
+    )
+    db_session.flush()
+
+    for path in ("tally.xml", "tally-masters"):
+        response = desk.get(f"{EXPORTS}/{body['id']}/{path}")
+        assert response.status_code == 409, path
+        assert "retailer name contains a control character" in response.json()["detail"]
+    # The stored CSV download is untouched by the XML checks.
+    assert desk.get(body["csv_url"]).status_code == 200

@@ -103,6 +103,28 @@ describe("OrderDetailScreen", () => {
     expect(screen.getByText(/so they may change/)).toBeInTheDocument();
   });
 
+  it("shows the order desk's reason on a rejected order", async () => {
+    await renderDetail({
+      [DETAIL]: json(
+        200,
+        makeOrder({ status: "rejected", rejection_reason: "Shop closed for renovation" }),
+      ),
+    });
+
+    const progress = await screen.findByRole("region", { name: "Progress" });
+    expect(within(progress).getByText("Reason from the order desk")).toBeInTheDocument();
+    expect(within(progress).getByText("Shop closed for renovation")).toBeInTheDocument();
+  });
+
+  it("shows no reason for an order that is not rejected", async () => {
+    await renderDetail({
+      [DETAIL]: json(200, makeOrder({ status: "pending_review", rejection_reason: null })),
+    });
+
+    await screen.findByRole("region", { name: "Progress" });
+    expect(screen.queryByText("Reason from the order desk")).not.toBeInTheDocument();
+  });
+
   it("labels a confirmed order's totals as confirmed", async () => {
     await renderDetail({
       [DETAIL]: json(200, makeOrder({ status: "confirmed", confirmed_at: "2026-11-07T12:00:00Z" })),

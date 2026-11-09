@@ -127,6 +127,15 @@ class Settings(BaseSettings):
       ignored and the TCP peer address is the client. Never "everything".
     - MAX_REQUEST_BODY_BYTES: largest accepted request body (default 64 KiB);
       larger bodies get 413 before they are read into memory.
+    - CAPTURE_INTERPRETER: "rules" (default, deterministic) or "gemini".
+      GEMINI_API_KEY (secret; required for "gemini"), GEMINI_MODEL and
+      GEMINI_TIMEOUT_SECONDS (default 8) configure the Gemini reader. Only
+      the message text and product codes and names are sent to Gemini; any
+      failure falls back to the rules, never failing a capture.
+    - TALLY_SALES_LEDGER_NAME, TALLY_DISCOUNT_LEDGER_NAME and
+      TALLY_VOUCHER_TYPE_NAME (default "Sales"): names used in the TallyPrime
+      XML voucher download. The discount ledger is needed only for batches
+      with a discount.
 
     Production deployment assumption: browsers reach the API same-origin
     through the Next.js proxy (browser -> Next.js -> FastAPI). The session
@@ -190,6 +199,33 @@ class Settings(BaseSettings):
     trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     max_request_body_bytes: int = Field(default=64 * 1024, ge=1024, le=10 * 1024 * 1024)
 
+    # Message capture interpreter (app.services.gemini_interpreter).
+    # "rules" (default) needs nothing else; "gemini" needs GEMINI_API_KEY and
+    # falls back to the rules whenever Gemini's answer cannot be used.
+    capture_interpreter: Literal["rules", "gemini"] = "rules"
+    gemini_api_key: SecretStr | None = None
+    # Restricted to model-name characters: it is placed in the request URL.
+    gemini_model: str = Field(
+        default="gemini-flash-latest", pattern=r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,63}$"
+    )
+    gemini_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+
+    # Tally XML voucher export (app.services.tally_xml_service). Ledger names
+    # must match ledgers that exist in the Tally company; they have no
+    # defaults so none is invented. Unset: the XML download explains what is
+    # missing, and the CSV export is unaffected.
+    tally_sales_ledger_name: str | None = Field(default=None, max_length=200)
+    tally_discount_ledger_name: str | None = Field(default=None, max_length=200)
+    tally_voucher_type_name: str = Field(default="Sales", max_length=200)
+
+    @field_validator("tally_voucher_type_name")
+    @classmethod
+    def _voucher_type_not_blank(cls, value: str) -> str:
+        """A blank voucher type would produce vouchers Tally cannot place."""
+        if not value.strip():
+            raise ValueError("TALLY_VOUCHER_TYPE_NAME must not be blank.")
+        return value.strip()
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT.parent / ".env",
         env_file_encoding="utf-8",
@@ -228,6 +264,23 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("gemini_api_key", mode="before")
+    @classmethod
+    def _blank_gemini_key_is_unset(cls, value: object) -> object:
+        """An empty GEMINI_API_KEY= line means "not configured"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _check_capture_interpreter(self) -> Self:
+        if self.capture_interpreter == "gemini" and self.gemini_api_key is None:
+            raise ValueError(
+                "CAPTURE_INTERPRETER=gemini requires GEMINI_API_KEY; set the key "
+                "or use CAPTURE_INTERPRETER=rules."
+            )
+        return self
 
     @field_validator("frontend_origins")
     @classmethod

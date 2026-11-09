@@ -46,6 +46,24 @@ describe("DeskSummary", () => {
     await waitFor(() => expect(tally).toHaveTextContent("5"));
   });
 
+  it("asks for the pending orders once: the count shares the queue's request", async () => {
+    const { backend } = await renderHome();
+    const summary = screen.getByRole("region", { name: "At a glance" });
+    await waitFor(() =>
+      expect(within(summary).getByRole("button", { name: /To review/ })).toHaveTextContent("3"),
+    );
+    await screen.findByText(/No orders/i).catch(() => undefined);
+
+    const pending = backend
+      .calls("GET /desk/orders")
+      .filter((call) => call.query.get("status") === "pending_review");
+    expect(pending).toHaveLength(1);
+    // Other counts still have their own request.
+    expect(
+      backend.calls("GET /desk/orders").filter((call) => call.query.get("status") === "on_hold"),
+    ).toHaveLength(1);
+  });
+
   it("filters the queue when a status tile is chosen", async () => {
     const { user, backend } = await renderHome();
     const summary = screen.getByRole("region", { name: "At a glance" });

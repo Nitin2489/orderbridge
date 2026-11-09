@@ -33,7 +33,7 @@ function HistoryRow({ batch }: { batch: ExportBatchSummary }) {
       <div className="flex flex-col gap-1">
         <Link
           href={exportBatchPath(batch.id)}
-          className="w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="tap-target w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           {batch.batch_number}
         </Link>

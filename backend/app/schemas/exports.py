@@ -26,6 +26,10 @@ def csv_url(batch_id: UUID) -> str:
     return CSV_PATH.format(batch_id=batch_id)
 
 
+def xml_url(batch_id: UUID) -> str:
+    return CSV_PATH.format(batch_id=batch_id).removesuffix("/csv") + "/tally.xml"
+
+
 class CreateExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,6 +131,30 @@ class ExportBatchDetail(ExportBatchSummary):
                 for entry in view.orders
             ],
         )
+
+
+class TallyStockItem(BaseModel):
+    name: str
+    unit: str
+
+
+class TallyMastersResponse(BaseModel):
+    """The Tally masters this batch's XML vouchers refer to. OrderBridge
+    cannot see the Tally company: each must already exist with exactly this
+    name, or Tally's import reports it."""
+
+    batch_number: str
+    voucher_type: str
+    sales_ledger: str | None = Field(description="Null when not configured.")
+    discount_ledger: str | None = Field(description="Null when not configured.")
+    discount_needed: bool
+    party_ledgers: list[str]
+    stock_items: list[TallyStockItem]
+    units: list[str]
+    missing_settings: list[str] = Field(
+        description="Settings to configure before the XML can be downloaded."
+    )
+    xml_url: str
 
 
 class IneligibleOrderResponse(BaseModel):

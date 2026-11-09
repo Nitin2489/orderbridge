@@ -19,13 +19,14 @@ import { EXPORTS_PATH, isBatchId } from "../paths";
 import type { ExportBatchDetail } from "../types";
 import { CsvNotice } from "./csv-notice";
 import { DownloadButton } from "./download-button";
+import { TallyXmlPanel } from "./tally-xml-panel";
 import { loadErrorMessage } from "./export-history";
 
 function BackToExports() {
   return (
     <Link
       href={EXPORTS_PATH}
-      className="inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="tap-target inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <ArrowLeftIcon className="size-4" aria-hidden="true" />
       Tally export
@@ -103,6 +104,8 @@ function BatchDetail({ batch }: { batch: ExportBatchDetail }) {
         <DownloadButton batch={batch} />
       </section>
 
+      <TallyXmlPanel batch={batch} />
+
       <section aria-labelledby="batch-orders-heading" className="flex flex-col gap-3">
         <h2 id="batch-orders-heading" className="text-base font-semibold">
           Orders in this export
@@ -119,7 +122,7 @@ function BatchDetail({ batch }: { batch: ExportBatchDetail }) {
                 <div className="flex flex-col gap-1">
                   <Link
                     href={deskOrderPath(order.id)}
-                    className="w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    className="tap-target w-fit rounded-sm font-mono font-semibold text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   >
                     {order.order_number}
                   </Link>

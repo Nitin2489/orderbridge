@@ -19,6 +19,18 @@ Scoring, per product (approved Phase A contract):
     product in this retailer's recent orders (any phrase)              +10
     then clamped to 0-100
 
+The language-model signal is weaker than both: when an AI interpreter
+suggested this product's code for the line and no product word was
+recognised for it, the product starts at 40 instead of 0, then the same
+size and history adjustments apply (and are explained), but the result is
+capped at 59: an AI-only suggestion always stays in the weak band, however
+many bonuses it collects. It never applies to the alias score, so a saved
+alias (95) always wins, and a recognised product word (60) outranks an
+AI-only suggestion unless the line's own pack size contradicts that product.
+In that case the AI-only suggestion is still not proposed: the line has no
+proposal, shows the recognised product (with its size conflict) and the AI
+suggestion as alternatives, and a person chooses.
+
 Bands: strong 85-100, possible 60-84, weak 30-59, very weak 0-29.
 A product is proposed only when its score is at least 30 and no other
 product has the same top score; otherwise there is no proposal and the
@@ -65,6 +77,12 @@ from app.services.capture_text import (
 
 ALIAS_SCORE = 95
 SYNONYM_SCORE = 60
+#: Starting score for the product an AI interpreter suggested, when no
+#: product word was recognised for it: a weak signal, below SYNONYM_SCORE.
+AI_SUGGESTION_SCORE = 40
+#: Highest score an AI-only suggestion can reach, with any bonuses: the top
+#: of the weak band, so it is never shown as a possible or strong match.
+AI_ONLY_MAX_SCORE = 59
 SIZE_MATCH_BONUS = 25
 SIZE_CONFLICT_PENALTY = -30
 HISTORY_BONUS = 10
@@ -301,6 +319,8 @@ def _score_product(
     context: MatchingContext,
 ) -> Candidate:
     reasons: list[str] = []
+    ai_suggested = line.suggested_sku is not None and line.suggested_sku == product.sku
+    ai_only = False
 
     if phrase is not None and context.aliases.get(phrase) == product.id:
         score = ALIAS_SCORE
@@ -312,6 +332,12 @@ def _score_product(
         if matched:
             score = SYNONYM_SCORE
             reasons += [f"Recognised '{key}' as {recognised[key]}." for key in matched]
+            if ai_suggested:
+                reasons.append("The AI reader also suggested this product.")
+        elif ai_suggested:
+            ai_only = True
+            score = AI_SUGGESTION_SCORE
+            reasons.append("Suggested by the AI reader (a weak signal; check it).")
         else:
             score = 0
             reasons.append("No recognised product words for this product.")
@@ -322,6 +348,12 @@ def _score_product(
     if product.id in context.history_product_ids:
         score += HISTORY_BONUS
         reasons.append("Ordered by this retailer in recent orders.")
+
+    if ai_only and score > AI_ONLY_MAX_SCORE:
+        score = AI_ONLY_MAX_SCORE
+        reasons.append(
+            "Capped as a weak match: only the AI reader suggested this product."
+        )
 
     score = clamp(score)
     band = band_for(score)
@@ -361,13 +393,38 @@ def match_line(line: ExtractedLine, context: MatchingContext) -> LineMatch:
             + " does not identify a pack size."
         )
 
+    # Products named by a recognised product word, and whether the top
+    # candidate is held up only by the AI suggestion (not by words or alias).
+    alias_id = context.aliases.get(phrase) if phrase else None
+    named_skus = {
+        product.sku
+        for product in context.products
+        if product.id != alias_id
+        and any(word in product.name_words for word in recognised.values())
+    }
+    named = [c for c in candidates if c.sku in named_skus]
+    top_is_ai_only = bool(candidates) and (
+        candidates[0].sku == line.suggested_sku
+        and candidates[0].sku not in named_skus
+        and candidates[0].product_id != alias_id
+    )
+
     proposal: Candidate | None = None
+    alternatives: tuple[Candidate, ...] | None = None
     if not candidates:
         line_reasons.append("There are no active products to match.")
     elif candidates[0].score < PROPOSAL_THRESHOLD:
         line_reasons.append(
             f"No product scored {PROPOSAL_THRESHOLD} or more; choose one."
         )
+    elif top_is_ai_only and named:
+        # The words name a product; an AI-only suggestion must not replace
+        # it through pack-size or history bonuses. A person chooses.
+        line_reasons.append(
+            f"The words name {named[0].name}, but its pack size does not match; "
+            f"the AI reader suggested {candidates[0].name}. Choose one."
+        )
+        alternatives = (candidates[0], named[0])
     elif len(candidates) > 1 and candidates[1].score == candidates[0].score:
         tied = [c for c in candidates if c.score == candidates[0].score]
         line_reasons.append(
@@ -378,11 +435,13 @@ def match_line(line: ExtractedLine, context: MatchingContext) -> LineMatch:
     else:
         proposal = candidates[0]
 
-    others = candidates[1:] if proposal is not None else candidates
+    if alternatives is None:
+        others = candidates[1:] if proposal is not None else candidates
+        alternatives = tuple(others[:MAX_ALTERNATIVES])
     return LineMatch(
         line_number=line.line_number,
         proposal=proposal,
-        alternatives=tuple(others[:MAX_ALTERNATIVES]),
+        alternatives=alternatives,
         candidates=tuple(candidates),
         reasons=tuple(line_reasons),
     )

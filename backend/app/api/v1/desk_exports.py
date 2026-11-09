@@ -8,8 +8,13 @@ Transactions: the POST commits exactly once after the service succeeds. On
 any error it rolls back explicitly (a failed rollback is logged and ends as
 a generic 500), so no order is ever left exported without its batch, CSV
 and audit event. Downloads only read the stored CSV.
+
+The TallyPrime XML download (tally_xml_service) is built from the stored
+CSV on request: sales vouchers in Tally's documented import structure,
+excluding GST. Its masters endpoint lists the Tally names it needs.
 """
 
+import hashlib
 import logging
 from typing import Annotated
 from uuid import UUID
@@ -17,7 +22,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 
-from app.api.dependencies import DbSession, DeskUser, require_trusted_origin
+from app.api.dependencies import (
+    AppSettings,
+    DbSession,
+    DeskUser,
+    require_trusted_origin,
+)
 from app.api.transactions import rollback_after_error
 from app.schemas.auth import ErrorResponse
 from app.schemas.exports import (
@@ -28,6 +38,9 @@ from app.schemas.exports import (
     ExportBatchSummary,
     IneligibleOrderResponse,
     IneligibleOrdersResponse,
+    TallyMastersResponse,
+    TallyStockItem,
+    xml_url,
 )
 from app.services import tally_export_service
 from app.services.tally_export_service import (
@@ -35,6 +48,15 @@ from app.services.tally_export_service import (
     IneligibleOrdersError,
     NoEligibleOrdersError,
     csv_bytes,
+)
+from app.services.tally_xml_service import (
+    BatchDataError,
+    TallyConfigurationError,
+    TallySettings,
+    build_tally_xml,
+    missing_settings,
+    read_batch_csv,
+    required_masters,
 )
 
 router = APIRouter(prefix="/desk/exports", tags=["order desk exports"])
@@ -214,5 +236,108 @@ def download_export_csv(batch_id: UUID, desk_user: DeskUser, db: DbSession) -> R
                 f'attachment; filename="orderbridge-tally-{batch_number}.csv"'
             ),
             "Cache-Control": "no-store",
+        },
+    )
+
+
+def _tally_settings(settings: AppSettings) -> TallySettings:
+    return TallySettings(
+        sales_ledger=settings.tally_sales_ledger_name,
+        discount_ledger=settings.tally_discount_ledger_name,
+        voucher_type=settings.tally_voucher_type_name.strip(),
+    )
+
+
+def _stored_vouchers(db: DbSession, batch_id: UUID):
+    stored = tally_export_service.get_batch_csv(db, batch_id)
+    if stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=BATCH_NOT_FOUND)
+    batch_number, content = stored
+    try:
+        return batch_number, read_batch_csv(content)
+    except BatchDataError as error:
+        # The stored export is inconsistent: never adjusted silently.
+        logger.error("Stored export cannot be turned into Tally vouchers: %s", error)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"This export cannot be turned into Tally vouchers: {error}",
+        ) from None
+
+
+@router.get(
+    "/{batch_id}/tally-masters",
+    response_model=TallyMastersResponse,
+    summary="Tally masters the XML vouchers need",
+    description=(
+        "Party ledgers, stock items, units, ledgers and voucher type that must "
+        "exist in the Tally company with exactly these names."
+    ),
+    responses={**_AUTH, **_NOT_FOUND},
+)
+def tally_masters(
+    batch_id: UUID, desk_user: DeskUser, db: DbSession, settings: AppSettings
+) -> TallyMastersResponse:
+    batch_number, vouchers = _stored_vouchers(db, batch_id)
+    masters = required_masters(vouchers, _tally_settings(settings))
+    return TallyMastersResponse(
+        batch_number=batch_number,
+        voucher_type=masters.voucher_type,
+        sales_ledger=masters.sales_ledger,
+        discount_ledger=masters.discount_ledger,
+        discount_needed=masters.discount_needed,
+        party_ledgers=list(masters.party_ledgers),
+        stock_items=[
+            TallyStockItem(name=item.name, unit=item.unit)
+            for item in masters.stock_items
+        ],
+        units=list(masters.units),
+        missing_settings=missing_settings(masters),
+        xml_url=xml_url(batch_id),
+    )
+
+
+@router.get(
+    "/{batch_id}/tally.xml",
+    summary="Download TallyPrime XML sales vouchers",
+    description=(
+        "One Sales voucher per order, built from the stored CSV. Follows "
+        "Tally's documented XML voucher format; not yet tested in TallyPrime. "
+        "Amounts exclude GST. X-Content-SHA256 is the SHA-256 of the exact "
+        "bytes. Import each batch once."
+    ),
+    responses={
+        200: {"content": {"application/xml": {}}, "description": "The XML file."},
+        **_AUTH,
+        **_NOT_FOUND,
+        409: {
+            "model": ErrorResponse,
+            "description": "Tally ledger names not configured, or inconsistent data.",
+        },
+    },
+    response_class=Response,
+)
+def download_tally_xml(
+    batch_id: UUID, desk_user: DeskUser, db: DbSession, settings: AppSettings
+) -> Response:
+    batch_number, vouchers = _stored_vouchers(db, batch_id)
+    try:
+        content = build_tally_xml(batch_number, vouchers, _tally_settings(settings))
+    except TallyConfigurationError as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(error)) from None
+    except BatchDataError as error:
+        logger.error("Tally vouchers do not balance: %s", error)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"This export cannot be turned into Tally vouchers: {error}",
+        ) from None
+    return Response(
+        content=content,
+        media_type="application/xml; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="orderbridge-tally-{batch_number}.xml"'
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-SHA256": hashlib.sha256(content).hexdigest(),
         },
     )

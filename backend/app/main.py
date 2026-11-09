@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.request_limits import RequestBodyLimitMiddleware
 from app.api.v1.auth import router as auth_router
@@ -13,6 +15,32 @@ from app.core.config import Settings, get_settings
 from app.services.otp_delivery import OtpDelivery, otp_delivery_for
 
 API_V1_PREFIX = "/api/v1"
+
+
+class NoStoreApiMiddleware:
+    """Cache-Control: no-store on every /api/v1 response, including errors.
+
+    API responses carry a user's prices, credit and orders, so neither the
+    browser nor a proxy may keep them. Other paths (such as /health) are
+    left alone. A plain ASGI middleware: it only rewrites the response
+    headers and never reads the body.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if path != API_V1_PREFIX and not path.startswith(API_V1_PREFIX + "/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_no_store(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, send_no_store)
 
 
 def create_app(
@@ -56,12 +84,16 @@ def create_app(
         allow_headers=["Content-Type"],
     )
 
-    # Added last, so it is the outermost middleware: oversized bodies are
-    # refused before anything else reads them.
+    # Oversized bodies are refused before anything else reads them (the
+    # no-store middleware outside it never reads the body).
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=app_settings.max_request_body_bytes,
     )
+
+    # Outermost, so every /api/v1 response gets no-store, including 413s,
+    # CORS preflight answers and errors.
+    application.add_middleware(NoStoreApiMiddleware)
 
     application.include_router(auth_router, prefix=API_V1_PREFIX)
     application.include_router(retailer_catalogue_router, prefix=API_V1_PREFIX)

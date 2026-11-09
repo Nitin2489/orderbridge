@@ -45,7 +45,7 @@ function BackLink({ role }: { role: CaptureRole }) {
   return (
     <Link
       href={capturesPath(role)}
-      className="inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="tap-target inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <ArrowLeftIcon className="size-4" aria-hidden="true" />
       All captured messages
@@ -267,8 +267,14 @@ function ReviewWorkspace({
         <p className="text-sm text-muted-foreground">
           {capture.interpretation.is_ai_model
             ? capture.interpretation.description
-            : "Read with rule-based interpretation (word rules and product matching, not an AI model). Every line needs your decision; nothing is ordered until you create the order and the order desk confirms it."}
+            : "Read with rule-based interpretation (word rules and product matching, not an AI model)."}{" "}
+          {role === "order_desk"
+            ? "Every line needs your decision; creating the order adds it to the order queue, where it is confirmed against current stock and credit."
+            : "Every line needs your decision; nothing is ordered until you create the order and the order desk confirms it."}
         </p>
+        {capture.interpretation.fallback_note ? (
+          <p className="text-sm text-muted-foreground">{capture.interpretation.fallback_note}</p>
+        ) : null}
       </div>
 
       <section aria-labelledby="message-heading" className="flex flex-col gap-2">

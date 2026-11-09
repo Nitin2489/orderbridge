@@ -26,7 +26,7 @@ function BackToOrders() {
   return (
     <Link
       href={ORDERS_PATH}
-      className="inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="tap-target inline-flex w-fit items-center gap-1 rounded-sm text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <ArrowLeftIcon className="size-4" aria-hidden="true" />
       All orders
@@ -133,7 +133,7 @@ function OrderDetail({
         </div>
       </div>
 
-      <OrderProgress order={order} />
+      <OrderProgress order={order} rejectionReason={order.rejection_reason} />
 
       <section aria-labelledby="order-items-heading" className="rounded-xl border bg-card px-5 shadow-xs">
         <h2 id="order-items-heading" className="pt-5 text-base font-semibold">

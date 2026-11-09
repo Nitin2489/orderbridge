@@ -70,6 +70,8 @@ export const deskOrderDetailSchema = z.object({
   retailer: retailerCreditSchema,
   items: z.array(orderLineSchema),
   events: z.array(orderEventSchema),
+  /** The message capture the order was created from; null for app orders. */
+  capture_id: z.string().nullable().optional(),
 });
 
 export const previewLineSchema = z.object({

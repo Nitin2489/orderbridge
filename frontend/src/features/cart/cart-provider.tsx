@@ -1,7 +1,15 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useReducer, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useSession } from "@/features/auth/session-provider";
 import type { CatalogueProduct } from "@/features/catalogue/types";
@@ -18,6 +26,7 @@ import {
   type CartLine,
   type CartState,
 } from "./cart-state";
+import { clearSavedCart, loadSavedLines, readSavedCart, writeSavedCart } from "./cart-storage";
 import { submissionFailure, type SubmissionFailure } from "./errors";
 import type { SubmitOrderPayload } from "./types";
 
@@ -28,9 +37,11 @@ import type { SubmitOrderPayload } from "./types";
  * Mounted once with the app providers (the navigation sits above the
  * /retailer layout), but always scoped to one retailer: the cart remembers
  * whose it is, and is emptied whenever the signed-in retailer changes,
- * including sign-out, session expiry and signing back in. It lives in memory
- * only: nothing is written to browser storage, and a page reload starts an
- * empty cart.
+ * including sign-out, session expiry and signing back in. Its products,
+ * quantities and notes are also saved in localStorage per retailer
+ * (cart-storage.ts), so a reload restores them; the saved cart is removed
+ * when it becomes empty (including after a successful order) and on
+ * sign-out.
  */
 
 interface SubmitVariables {
@@ -58,6 +69,8 @@ export interface CartContextValue {
   retryAvailableAt: number;
   confirmation: RetailerOrderDetail | null;
   dismissConfirmation: () => void;
+  /** Saved products that could not be restored (no longer offered), or 0. */
+  unrestoredCount: number;
 }
 
 const CartContext = createContext<CartContextValue | null>(null);
@@ -67,7 +80,7 @@ function newClientRequestId(): string {
 }
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const { user } = useSession();
+  const { user, status } = useSession();
   const ownerId = user?.role === "retailer" ? (user.retailer?.id ?? null) : null;
 
   const [state, dispatch] = useReducer(cartReducer, ownerId, emptyCart);
@@ -78,6 +91,50 @@ export function CartProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "reset", ownerId });
   }
   const cart: CartState = state.ownerId === ownerId ? state : emptyCart(ownerId);
+
+  // Restore this retailer's saved cart once per sign-in. Nothing is saved
+  // until the attempt has finished, so an empty cart never overwrites it.
+  const restoredFor = useRef<string | null>(null);
+  const [unrestored, setUnrestored] = useState<{ ownerId: string; count: number } | null>(null);
+  useEffect(() => {
+    if (!ownerId || restoredFor.current === ownerId) {
+      return;
+    }
+    const saved = readSavedCart(ownerId);
+    if (!saved) {
+      restoredFor.current = ownerId;
+      return;
+    }
+    let cancelled = false;
+    void loadSavedLines(saved).then(({ lines, missing }) => {
+      if (cancelled) {
+        return;
+      }
+      dispatch({ type: "restore", ownerId, lines, notes: saved.notes });
+      setUnrestored(missing > 0 ? { ownerId, count: missing } : null);
+      restoredFor.current = ownerId;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ownerId]);
+
+  useEffect(() => {
+    if (ownerId && restoredFor.current === ownerId && state.ownerId === ownerId) {
+      writeSavedCart(ownerId, state.lines, state.notes);
+    }
+  }, [ownerId, state]);
+
+  // Signing out (or the session ending) removes that retailer's saved cart.
+  const previousOwner = useRef(ownerId);
+  useEffect(() => {
+    const previous = previousOwner.current;
+    previousOwner.current = ownerId;
+    if (previous && previous !== ownerId && status === "unauthenticated") {
+      clearSavedCart(previous);
+      restoredFor.current = null;
+    }
+  }, [ownerId, status]);
 
   const inFlight = useRef(false);
   const queryClient = useQueryClient();
@@ -163,6 +220,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       retryAfter && mutation.submittedAt ? mutation.submittedAt + retryAfter * 1000 : 0,
     confirmation: cart.confirmation,
     dismissConfirmation: () => dispatch({ type: "dismissConfirmation" }),
+    unrestoredCount: unrestored && unrestored.ownerId === ownerId ? unrestored.count : 0,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

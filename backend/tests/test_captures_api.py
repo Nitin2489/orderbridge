@@ -6,8 +6,10 @@ committed through the session fixture's savepoint mode, so everything is
 still rolled back after each test.
 """
 
+import json
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -17,7 +19,9 @@ from app.core.database import get_db
 from app.main import create_app
 from app.models import Order, OrderCapture, Product, Retailer, RetailerProductAlias
 from app.services import capture_service
+from app.services.gemini_interpreter import GeminiInterpreter
 from app.services.otp_delivery import InMemoryOtpDelivery
+from app.services.retailer_order_service import OrderLineInput, submit_order
 from seed import seed_all
 
 DEMO = (
@@ -32,7 +36,7 @@ GUPTA_PHONE = "+919000000002"
 DESK_PHONE = "+919000000010"
 
 
-def make_settings() -> Settings:
+def make_settings(**overrides) -> Settings:
     return Settings(
         _env_file=None,
         app_env="testing",
@@ -41,6 +45,7 @@ def make_settings() -> Settings:
         auth_session_cookie_secure=False,
         auth_debug_otp=False,
         frontend_origins=[TRUSTED_ORIGIN],
+        **overrides,
     )
 
 
@@ -502,3 +507,253 @@ def test_failed_submission_rolls_back_everything(app, db_session, monkeypatch):
         assert current["status"] == "ready"
         assert current["version"] == capture["version"]
         assert current["order"] is None
+
+
+# ---------------------------------------------------------------------------
+# The configured interpreter is used through the HTTP endpoint
+# ---------------------------------------------------------------------------
+
+GEMINI_KEY = "api-test-gemini-key-not-real-0123456789"
+GEMINI_MODEL = "gemini-api-test-model"
+GEMINI_LINES = [
+    {"line_text": "5 peti biscuit chhota", "product_text": "biscuit chhota",
+     "quantity_text": "5", "unit_text": "peti", "catalogue_sku": "SKU-BS-075"},
+    {"line_text": "2 peti washing powder 1 kilo", "product_text": "washing powder",
+     "quantity_text": "2", "unit_text": "peti", "size_texts": ["1 kilo"],
+     "catalogue_sku": "SKU-DT-1KG"},
+    {"line_text": "chai patti 250 wala 1 peti", "product_text": "chai patti",
+     "quantity_text": "1", "unit_text": "peti", "size_texts": ["250 wala"],
+     "catalogue_sku": "SKU-TE-250"},
+]  # fmt: skip
+
+
+def gemini_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": json.dumps({"lines": GEMINI_LINES})}]
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        },
+    )
+
+
+@pytest.fixture
+def gemini_desk(db_session, monkeypatch):
+    """A desk client of an app configured for Gemini, whose Gemini HTTP calls
+    are answered by a fake transport. Returns (client, requests, answers)."""
+    requests: list[httpx.Request] = []
+    answers: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        answer = answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    original_init = GeminiInterpreter.__init__
+
+    def init_with_fake_transport(self, **kwargs):
+        original_init(self, **{**kwargs, "transport": httpx.MockTransport(handler)})
+
+    monkeypatch.setattr(GeminiInterpreter, "__init__", init_with_fake_transport)
+
+    seed_all(db_session)
+    db_session.commit()
+    application = create_app(
+        make_settings(
+            capture_interpreter="gemini",
+            gemini_api_key=GEMINI_KEY,
+            gemini_model=GEMINI_MODEL,
+        ),
+        otp_delivery=InMemoryOtpDelivery(),
+    )
+
+    def override_get_db():
+        yield db_session
+
+    application.dependency_overrides[get_db] = override_get_db
+    with new_client(application) as client:
+        yield login(client, DESK_PHONE), requests, answers
+
+
+def test_endpoint_uses_this_apps_gemini_settings(gemini_desk, db_session):
+    client, requests, answers = gemini_desk
+    answers.append(gemini_reply())
+
+    response = create(client, db_session, for_retailer="Sharma General Store")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["interpretation"]["name"] == "gemini@1"
+    assert body["interpretation"]["kind"] == "language_model"
+    assert body["interpretation"]["is_ai_model"] is True
+    assert body["interpretation"]["fallback_note"] is None
+    # The request used this application's key and model (not the process's).
+    (request,) = requests
+    assert request.headers["x-goog-api-key"] == GEMINI_KEY
+    assert f"/models/{GEMINI_MODEL}:generateContent" in str(request.url)
+    sent = json.loads(json.loads(request.content)["contents"][0]["parts"][0]["text"])
+    assert set(sent) == {"catalogue", "message"}
+    # Every line is still a pending suggestion with an unconfirmed unit.
+    assert [line["match"]["proposal"]["sku"] for line in body["lines"]] == [
+        "SKU-BS-075",
+        "SKU-DT-1KG",
+        "SKU-TE-250",
+    ]
+    assert all(line["unit"]["confirmed"] is False for line in body["lines"])
+    assert body["can_submit"] is False
+    assert GEMINI_KEY not in response.text
+    capture = db_session.get(OrderCapture, UUID(body["id"]))
+    assert capture.interpreter == "gemini@1"
+    assert capture.extracted_data["model"] == GEMINI_MODEL
+
+
+def test_endpoint_falls_back_to_rules_when_gemini_times_out(gemini_desk, db_session):
+    client, requests, answers = gemini_desk
+    answers.append(httpx.ReadTimeout("slow"))
+
+    response = create(client, db_session, for_retailer="Sharma General Store")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert len(requests) == 1  # Gemini was tried
+    assert body["interpretation"]["name"] == "rules@1"
+    assert body["interpretation"]["is_ai_model"] is False
+    assert body["interpretation"]["fallback_note"] == (
+        "The AI reader did not answer in time. The rule-based reader was used instead."
+    )
+    # The deterministic rules produced the usual result.
+    first_line = body["lines"][0]
+    assert first_line["original_text"] == "5 peti biscuit chhota"
+    assert first_line["match"]["proposal"]["sku"] == "SKU-BS-075"
+    assert first_line["match"]["proposal"]["match_score"] == 60
+    assert [line["original_text"] for line in body["lines"]] == [
+        "5 peti biscuit chhota",
+        "2 peti washing powder 1 kilo",
+        "chai patti 250 wala 1 peti",
+    ]
+    capture = db_session.get(OrderCapture, UUID(body["id"]))
+    assert capture.extracted_data["ai_fallback"] == "timeout"
+
+
+def test_default_app_settings_use_the_rules_without_calling_gemini(
+    desk, db_session, monkeypatch
+):
+    def no_gemini(*args, **kwargs):
+        raise AssertionError(
+            "Gemini must not be constructed with the default settings."
+        )
+
+    monkeypatch.setattr(GeminiInterpreter, "__init__", no_gemini)
+
+    response = create(desk, db_session, for_retailer="Sharma General Store")
+
+    assert response.status_code == 201, response.text
+    assert response.json()["interpretation"]["name"] == "rules@1"
+    assert response.json()["interpretation"]["fallback_note"] is None
+
+
+# ---------------------------------------------------------------------------
+# Possible duplicate warning (order desk)
+# ---------------------------------------------------------------------------
+
+
+def test_desk_gets_a_duplicate_warning_and_can_continue(desk, db_session):
+    sharma = retailer_id(db_session, "Sharma General Store")
+    first = desk.post(
+        CAPTURES,
+        json={
+            "client_request_id": str(uuid4()),
+            "message": DEMO,
+            "retailer_id": sharma,
+        },
+    )
+    assert first.status_code == 201, first.text
+    before = db_session.scalar(select(func.count()).select_from(OrderCapture))
+
+    request_id = str(uuid4())
+    warned = desk.post(
+        CAPTURES,
+        json={
+            "client_request_id": request_id,
+            "message": DEMO.upper(),
+            "retailer_id": sharma,
+        },
+    )
+
+    assert warned.status_code == 409
+    body = warned.json()
+    assert body["code"] == "possible_duplicate"
+    assert body["detail"].startswith("This retailer already has a capture")
+    (duplicate,) = body["duplicates"]
+    assert duplicate["capture_id"] == first.json()["id"]
+    assert duplicate["status"] == "needs_review"
+    assert duplicate["order"] is None
+    assert set(duplicate) == {"capture_id", "created_at", "status", "order"}
+    assert db_session.scalar(select(func.count()).select_from(OrderCapture)) == before
+
+    # Same request id, now confirmed as a separate order.
+    created = desk.post(
+        CAPTURES,
+        json={
+            "client_request_id": request_id,
+            "message": DEMO.upper(),
+            "retailer_id": sharma,
+            "allow_duplicate": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["id"] != first.json()["id"]
+
+
+# ---------------------------------------------------------------------------
+# Desk order review links back to the original message
+# ---------------------------------------------------------------------------
+
+
+def test_desk_order_detail_links_to_its_capture(desk, sharma, db_session):
+    capture = ready_demo(desk, db_session)
+    order_id = submit(desk, capture).json()["order"]["id"]
+
+    detail = desk.get(f"/api/v1/desk/orders/{order_id}")
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["capture_id"] == capture["id"]
+    original = desk.get(f"{CAPTURES}/{detail.json()['capture_id']}")
+    assert original.status_code == 200
+    assert original.json()["original_message"] == DEMO
+    assert original.json()["status"] == "submitted"
+    assert [line["resolution"] for line in original.json()["lines"]] == [
+        "included",
+        "included",
+        "excluded",
+    ]
+    # The desk order endpoint stays desk-only.
+    assert sharma.get(f"/api/v1/desk/orders/{order_id}").status_code == 403
+
+
+def test_an_app_order_has_no_capture_link(desk, db_session):
+    sharma = db_session.scalar(
+        select(Retailer).where(Retailer.business_name == "Sharma General Store")
+    )
+    biscuit = db_session.scalar(select(Product).where(Product.sku == "SKU-BS-075"))
+    result = submit_order(
+        db_session,
+        sharma,
+        [OrderLineInput(product_id=biscuit.id, quantity=1)],
+        client_request_id=uuid4(),
+    )
+    db_session.commit()
+
+    detail = desk.get(f"/api/v1/desk/orders/{result.order.id}")
+
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["source"] == "retailer_app"
+    assert detail.json()["capture_id"] is None

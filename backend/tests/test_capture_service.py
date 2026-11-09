@@ -5,6 +5,7 @@ with the seeded client data only. Orders are created through the real
 retailer order service; nothing is added to the seed.
 """
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ from app.services.capture_service import (
     InvalidReviewError,
     LineDecision,
     NoOrderLinesError,
+    PossibleDuplicateCaptureError,
     RetailerInactiveError,
     RetailerNotFoundError,
     StaleCaptureVersionError,
@@ -86,7 +88,14 @@ def data(db_session):
 
 
 def create(
-    db_session, data, message=DEMO, *, actor=None, retailer=None, request_id=None
+    db_session,
+    data,
+    message=DEMO,
+    *,
+    actor=None,
+    retailer=None,
+    request_id=None,
+    allow_duplicate=False,
 ):
     actor = actor or data["desk"]
     retailer_id = None
@@ -98,6 +107,7 @@ def create(
         message=message,
         client_request_id=request_id or uuid4(),
         retailer_id=retailer_id,
+        allow_duplicate=allow_duplicate,
     ).capture
 
 
@@ -703,7 +713,8 @@ def test_no_changes_after_submission_or_discard(db_session, data):
     discarded = capture_service.discard_capture(
         db_session,
         data["desk"],
-        create(db_session, data).id,
+        # The same demo message again, deliberately (then discarded).
+        create(db_session, data, allow_duplicate=True).id,
         expected_version=1,
         reason="Duplicate of an earlier message",
     )
@@ -860,3 +871,197 @@ def test_existing_alias_is_never_replaced_silently(db_session, data):
     assert old.product_id == product_id(data, TEA)  # history kept
     assert old.deactivated_by_user_id == data["desk"].user_id
     assert old.replaced_by_alias_id == new.id
+
+
+def test_an_earlier_order_ranks_alternatives_for_that_retailer_only(db_session, data):
+    """History from a real earlier order: +10 and a reason, which reorders the
+    alternatives of the next capture; it does not change the proposal, and
+    another retailer's capture is unaffected."""
+    message = "chai patti 1 peti"
+    before = create(db_session, data, message)
+    assert [c["sku"] for c in line(before, 1).candidates] == [TEA, BISCUIT, DETERGENT]
+
+    submit_order(
+        db_session,
+        data["sharma"],
+        [OrderLineInput(product_id=product_id(data, DETERGENT), quantity=2)],
+        client_request_id=uuid4(),
+    )
+
+    # The same message again for Sharma, as a separate order.
+    after = create(db_session, data, message, allow_duplicate=True)
+    for_gupta = create(db_session, data, message, retailer=data["gupta"])
+
+    # The proposal is unchanged: history never selects a product.
+    for capture in (before, after, for_gupta):
+        assert line(capture, 1).proposed_product_id == product_id(data, TEA)
+        assert line(capture, 1).proposed_score == 60
+    # Sharma's earlier detergent order moves detergent ahead of biscuit.
+    candidates = line(after, 1).candidates
+    assert [c["sku"] for c in candidates] == [TEA, DETERGENT, BISCUIT]
+    detergent = next(c for c in candidates if c["sku"] == DETERGENT)
+    assert detergent["score"] == 10  # the +10 history bonus, nothing more
+    assert detergent["weak_match"] is True
+    assert "Ordered by this retailer in recent orders." in detergent["reasons"]
+    # Gupta has no such order: its ranking is as before.
+    assert [c["sku"] for c in line(for_gupta, 1).candidates] == [
+        TEA,
+        BISCUIT,
+        DETERGENT,
+    ]
+
+
+def test_history_alone_never_creates_a_proposal(db_session, data):
+    submit_order(
+        db_session,
+        data["sharma"],
+        [OrderLineInput(product_id=product_id(data, DETERGENT), quantity=2)],
+        client_request_id=uuid4(),
+    )
+
+    capture = create(db_session, data, "3 peti lal dabba")
+
+    assert line(capture, 1).proposed_product_id is None
+    top = line(capture, 1).candidates[0]
+    assert (top["sku"], top["score"]) == (DETERGENT, 10)
+
+
+# ---------------------------------------------------------------------------
+# Possible duplicate messages (order desk)
+# ---------------------------------------------------------------------------
+
+T0 = datetime(2026, 11, 9, 9, 0, tzinfo=UTC)
+
+
+def desk_create(db_session, data, message=DEMO, *, retailer=None, now=None, **kwargs):
+    return capture_service.create_capture(
+        db_session,
+        data["desk"],
+        message=message,
+        client_request_id=kwargs.pop("request_id", None) or uuid4(),
+        retailer_id=(retailer or data["sharma"]).id,
+        now=now,
+        **kwargs,
+    )
+
+
+def capture_count(db_session) -> int:
+    return db_session.scalar(select(func.count()).select_from(OrderCapture))
+
+
+def test_desk_is_warned_about_the_same_message_for_the_same_retailer(db_session, data):
+    first = desk_create(db_session, data, now=T0).capture
+    before = capture_count(db_session)
+
+    with pytest.raises(PossibleDuplicateCaptureError) as warning:
+        desk_create(db_session, data, now=T0 + timedelta(hours=2))
+
+    (duplicate,) = warning.value.duplicates
+    assert duplicate.capture_id == first.id
+    assert duplicate.created_at == T0
+    assert duplicate.status == CaptureStatus.NEEDS_REVIEW
+    assert duplicate.order_id is None
+    assert capture_count(db_session) == before  # nothing stored
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "Bhaiya  5 PETI biscuit chhota,2 peti washing powder 1 kilo; chai patti 250 wala 1 peti!!",
+        "bhaiya ५ peti biscuit chhota, २ peti washing powder १ kilo, chai patti २५० wala १ peti",
+        "\nbhaiya 5 peti biscuit chhota\n2 peti washing powder 1 kilo\nchai patti 250 wala 1 peti\n",
+    ],
+    ids=["case-spacing-punctuation", "devanagari-digits", "line-breaks"],
+)
+def test_equivalent_messages_are_recognised(db_session, data, variant):
+    desk_create(db_session, data, now=T0)
+
+    with pytest.raises(PossibleDuplicateCaptureError):
+        desk_create(db_session, data, variant, now=T0 + timedelta(minutes=5))
+
+
+def test_a_different_message_is_not_a_duplicate(db_session, data):
+    desk_create(db_session, data, now=T0)
+    desk_create(
+        db_session, data, "bhaiya 6 peti biscuit chhota", now=T0 + timedelta(minutes=5)
+    )
+
+
+def test_the_same_message_for_another_retailer_is_not_a_duplicate(db_session, data):
+    desk_create(db_session, data, now=T0)
+
+    other = desk_create(
+        db_session, data, retailer=data["gupta"], now=T0 + timedelta(minutes=5)
+    )
+
+    assert other.created is True
+    assert other.capture.retailer_id == data["gupta"].id
+
+
+def test_the_warning_covers_24_hours_only(db_session, data):
+    desk_create(db_session, data, now=T0)
+
+    with pytest.raises(PossibleDuplicateCaptureError):
+        desk_create(db_session, data, now=T0 + timedelta(hours=23, minutes=59))
+    later = desk_create(db_session, data, now=T0 + timedelta(hours=24, minutes=1))
+
+    assert later.created is True
+
+
+def test_desk_can_continue_with_a_genuine_repeat_order(db_session, data):
+    first = desk_create(db_session, data, now=T0).capture
+
+    second = desk_create(
+        db_session, data, now=T0 + timedelta(hours=1), allow_duplicate=True
+    ).capture
+
+    assert second.id != first.id
+    assert second.retailer_id == first.retailer_id
+    assert second.original_message == first.original_message
+
+
+def test_the_warning_shows_the_order_of_a_submitted_capture(db_session, data):
+    result = submit(db_session, data, ready_demo(db_session, data))
+
+    with pytest.raises(PossibleDuplicateCaptureError) as warning:
+        desk_create(db_session, data)
+
+    (duplicate,) = warning.value.duplicates
+    assert duplicate.status == CaptureStatus.SUBMITTED
+    assert duplicate.order_id == result.order.id
+    assert duplicate.order_number == result.order.order_number
+    assert duplicate.order_status == "pending_review"
+
+
+def test_discarded_captures_do_not_count(db_session, data):
+    first = desk_create(db_session, data, now=T0).capture
+    capture_service.discard_capture(
+        db_session,
+        data["desk"],
+        first.id,
+        expected_version=1,
+        reason="Entered by mistake",
+    )
+
+    again = desk_create(db_session, data, now=T0 + timedelta(minutes=5))
+
+    assert again.created is True
+
+
+def test_a_retried_request_returns_its_capture_without_a_warning(db_session, data):
+    request_id = uuid4()
+    first = desk_create(db_session, data, now=T0, request_id=request_id)
+
+    retried = desk_create(
+        db_session, data, now=T0 + timedelta(seconds=5), request_id=request_id
+    )
+
+    assert retried.created is False
+    assert retried.capture.id == first.capture.id
+
+
+def test_retailers_capturing_their_own_messages_are_not_warned(db_session, data):
+    first = create(db_session, data, actor=data["sharma_actor"])
+    second = create(db_session, data, actor=data["sharma_actor"])
+
+    assert second.id != first.id

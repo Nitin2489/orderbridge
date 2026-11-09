@@ -181,6 +181,14 @@ class DeskOrderDetail(BaseModel):
     retailer: RetailerCreditPosition
     items: list[OrderLineResponse] = Field(description="Sorted by line_number.")
     events: list[OrderEventResponse] = Field(description="Oldest first.")
+    capture_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The message capture this order was created from (open it at "
+            "/api/v1/captures/{capture_id}), or null for an order placed in "
+            "the app."
+        ),
+    )
 
     @classmethod
     def from_view(cls, view: DeskOrderView) -> "DeskOrderDetail":
@@ -211,6 +219,7 @@ class DeskOrderDetail(BaseModel):
                 for item in sorted(order.items, key=lambda item: item.line_number)
             ],
             events=[OrderEventResponse.from_row(row) for row in view.events],
+            capture_id=view.capture_id,
         )
 
 

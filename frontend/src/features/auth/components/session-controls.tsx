@@ -28,7 +28,7 @@ export function SessionControls({ className }: { className?: string }) {
 
   if (status === "unauthenticated" && pathname !== SIGN_IN_PATH) {
     return (
-      <Button asChild className={cn("h-10", className)}>
+      <Button asChild className={cn("h-11", className)}>
         <Link href={SIGN_IN_PATH}>Sign in</Link>
       </Button>
     );
@@ -84,7 +84,7 @@ function SignedInControls({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-9 px-2 text-muted-foreground hover:text-foreground gap-1.5"
+        className="h-11 min-w-11 px-2 text-muted-foreground hover:text-foreground gap-1.5"
         onClick={() => logout.mutate()}
         disabled={busy}
         title="Sign out"

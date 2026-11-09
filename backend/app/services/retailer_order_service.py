@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     ORDER_NUMBER_SEQUENCE,
     Order,
+    OrderEvent,
     OrderEventType,
     OrderItem,
     OrderSource,
@@ -573,6 +574,26 @@ def list_orders(
     return OrderPage(
         orders=[(order, counts.get(order.id, 0)) for order in orders],
         total=total or 0,
+    )
+
+
+def rejection_reason(session: Session, order: Order) -> str | None:
+    """The order desk's reason for rejecting this order, or None.
+
+    Only the reason recorded on the order's own rejection event: no other
+    event details, notes or actor information. Callers pass an order that
+    already belongs to the signed-in retailer (get_order).
+    """
+    if order.status != OrderStatus.REJECTED:
+        return None
+    return session.scalar(
+        select(OrderEvent.reason)
+        .where(
+            OrderEvent.order_id == order.id,
+            OrderEvent.event_type == OrderEventType.REJECTED,
+        )
+        .order_by(OrderEvent.created_at.desc())
+        .limit(1)
     )
 
 

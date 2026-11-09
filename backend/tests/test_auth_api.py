@@ -992,3 +992,58 @@ def test_health_endpoint_still_works(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "healthy", "application": "OrderBridge API"}
+
+
+# ---------------------------------------------------------------------------
+# request-otp origin check and no-store API responses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": UNTRUSTED_ORIGIN_URL},
+        {"Origin": "null"},
+        {"Origin": "", "Referer": f"{UNTRUSTED_ORIGIN_URL}/x"},
+    ],
+    ids=["untrusted", "null", "untrusted-referer"],
+)
+def test_request_otp_from_an_untrusted_origin_is_rejected(client, db_session, headers):
+    response = client.post(
+        f"{API}/request-otp", json={"phone_number": SHARMA_PHONE}, headers=headers
+    )
+
+    assert response.status_code == 403
+    # Nothing was issued, so nothing can be delivered or rate-limited away.
+    assert db_session.scalars(select(OtpChallenge)).all() == []
+    # A request from the frontend's origin still works.
+    trusted = client.post(f"{API}/request-otp", json={"phone_number": SHARMA_PHONE})
+    assert trusted.status_code == 200
+    assert len(db_session.scalars(select(OtpChallenge)).all()) == 1
+
+
+def test_api_responses_are_never_stored(client):
+    # Unauthenticated, an error and a rejected request.
+    assert client.get(f"{API}/me").headers["cache-control"] == "no-store"
+    assert client.get("/api/v1/no-such-route").headers["cache-control"] == "no-store"
+    forbidden = client.post(f"{API}/logout", headers={"Origin": UNTRUSTED_ORIGIN_URL})
+    assert forbidden.status_code == 403
+    assert forbidden.headers["cache-control"] == "no-store"
+    requested = client.post(f"{API}/request-otp", json={"phone_number": SHARMA_PHONE})
+    assert requested.headers["cache-control"] == "no-store"
+
+    # Authenticated: the signed-in user's own data.
+    login(client, SHARMA_PHONE)
+    me = client.get(f"{API}/me")
+    assert me.status_code == 200
+    assert me.headers["cache-control"] == "no-store"
+    catalogue = client.get("/api/v1/retailer/catalogue")
+    assert catalogue.status_code == 200
+    assert catalogue.headers["cache-control"] == "no-store"
+
+
+def test_health_is_not_marked_no_store(client):
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert "cache-control" not in response.headers

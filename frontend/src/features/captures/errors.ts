@@ -4,8 +4,10 @@ import {
   aliasConflictSchema,
   linesInvalidSchema,
   notReadySchema,
+  possibleDuplicateSchema,
   staleCaptureSchema,
   type LineIssue,
+  type PossibleDuplicate,
 } from "./types";
 
 /**
@@ -18,6 +20,7 @@ export type CaptureFailure =
   | { kind: "not_ready"; unresolvedLines: number[]; message: string }
   | { kind: "alias_conflict"; lineNumber: number; aliasText: string; message: string }
   | { kind: "lines_invalid"; issues: LineIssue[]; message: string }
+  | { kind: "possible_duplicate"; duplicates: PossibleDuplicate[]; message: string }
   | { kind: "state"; message: string }
   | { kind: "invalid"; message: string }
   | { kind: "forbidden"; message: string }
@@ -46,6 +49,14 @@ export function captureFailure(error: unknown): CaptureFailure {
       const notReady = notReadySchema.safeParse(body);
       if (notReady.success) {
         return { kind: "not_ready", unresolvedLines: notReady.data.unresolved_lines, message };
+      }
+      const duplicate = possibleDuplicateSchema.safeParse(body);
+      if (duplicate.success) {
+        return {
+          kind: "possible_duplicate",
+          duplicates: duplicate.data.duplicates,
+          message: duplicate.data.detail,
+        };
       }
       const alias = aliasConflictSchema.safeParse(body);
       if (alias.success) {

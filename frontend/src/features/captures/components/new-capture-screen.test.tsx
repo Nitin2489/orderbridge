@@ -36,9 +36,77 @@ describe("NewCaptureScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Read message" }));
 
-    expect(screen.getByText("Choose the retailer who sent it.")).toBeInTheDocument();
-    expect(screen.getByText("Paste the message the retailer sent.")).toBeInTheDocument();
+    expect(screen.getByText("Choose the retailer this order is for.")).toBeInTheDocument();
+    expect(screen.getByText("Paste or type the order as received.")).toBeInTheDocument();
     expect(backend.calls(CREATE)).toHaveLength(0);
+  });
+
+  it("uses desk wording that does not assume the retailer sent the message", async () => {
+    await renderNew();
+
+    expect(screen.getByLabelText("Retailer this order is for")).toBeInTheDocument();
+    expect(
+      screen.getByText(/as received: from WhatsApp, a phone call, a salesman's notebook or anywhere else/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Retailer who sent it/)).not.toBeInTheDocument();
+  });
+
+  it("uses retailer wording for a retailer's own message", async () => {
+    const { user } = await renderNew({}, false);
+
+    expect(screen.getByText(/Paste your order message exactly as you wrote it/)).toBeInTheDocument();
+    expect(screen.queryByText(/salesman's notebook/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Read message" }));
+    expect(screen.getByText("Paste your order message.")).toBeInTheDocument();
+  });
+
+  it("warns about a possible duplicate, can go back, or creates it anyway with the same request", async () => {
+    const duplicate = json(409, {
+      detail:
+        "This retailer already has a capture with the same message from the last 24 hours. Check it, or create this one anyway if it is a separate order.",
+      code: "possible_duplicate",
+      duplicates: [
+        {
+          capture_id: CAPTURE_ID,
+          created_at: "2026-11-09T04:00:00Z",
+          status: "submitted",
+          order: { id: "44444444-4444-4444-8444-444444444444", order_number: "OB-2026-000777", status: "pending_review" },
+        },
+      ],
+    });
+    const { user, backend } = await renderNew({
+      [CREATE]: sequence(duplicate, duplicate, json(201, makeCapture())),
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Sharma General Store" }));
+    await user.type(screen.getByLabelText("Message"), DEMO);
+    await user.click(screen.getByRole("button", { name: "Read message" }));
+
+    const warning = await screen.findByRole("alert");
+    expect(warning).toHaveTextContent("Possible duplicate");
+    expect(warning).toHaveTextContent("Sharma General Store already has a capture with the same message");
+    expect(warning).toHaveTextContent("Order OB-2026-000777 (Pending review)");
+    expect(screen.getByRole("link", { name: /Captured 9 Nov 2026/ })).toHaveAttribute(
+      "href",
+      `/desk/captures/${CAPTURE_ID}`,
+    );
+    expect(mockRouter.push).not.toHaveBeenCalled();
+
+    // Go back: the warning closes and nothing more is sent.
+    await user.click(screen.getByRole("button", { name: "Go back and review" }));
+    expect(screen.queryByText("Possible duplicate")).not.toBeInTheDocument();
+    expect(backend.calls(CREATE)).toHaveLength(1);
+
+    // Read it again: warned again; create anyway with the same request id.
+    await user.click(screen.getByRole("button", { name: "Read message" }));
+    await user.click(await screen.findByRole("button", { name: "Create anyway" }));
+
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith(`/desk/captures/${CAPTURE_ID}`));
+    const calls = backend.calls(CREATE).map((call) => call.body as Record<string, unknown>);
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).not.toHaveProperty("allow_duplicate");
+    expect(calls[2]?.allow_duplicate).toBe(true);
+    expect(calls[2]?.client_request_id).toBe(calls[1]?.client_request_id);
   });
 
   it("sends the message exactly as typed, with the chosen retailer, then opens the review", async () => {
@@ -57,7 +125,7 @@ describe("NewCaptureScreen", () => {
   it("a retailer never names a retailer", async () => {
     const { user, backend } = await renderNew({ [CREATE]: json(201, makeCapture()) }, false);
 
-    expect(screen.queryByText("Retailer who sent it")).not.toBeInTheDocument();
+    expect(screen.queryByText("Retailer this order is for")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText("Message"), DEMO);
     await user.click(screen.getByRole("button", { name: "Read message" }));
 

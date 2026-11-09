@@ -476,7 +476,8 @@ def test_an_outsider_cannot_obtain_or_issue_a_demo_code(db_session):
 
     assert response.status_code == 200
     assert "demo_code" not in response.json()
-    assert "cache-control" not in response.headers
+    # Every API response is no-store, so this one looks like any other.
+    assert response.headers["cache-control"] == "no-store"
     # Nothing was issued, stored or delivered.
     assert challenge_count(db_session, "+919000000001") == 0
     assert app.state.otp_delivery.delivered_count("+919000000001") == 0

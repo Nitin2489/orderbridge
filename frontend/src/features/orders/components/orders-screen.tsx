@@ -241,7 +241,9 @@ export function OrdersScreen() {
       <div
         role="group"
         aria-label="Filter by status"
-        className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
+        // Wraps at every width, so on a 320 px phone every status is visible
+        // and tappable (a sideways-scrolling row hid the last ones).
+        className="flex flex-wrap gap-2 pb-1"
       >
         <StatusChip label="All" pressed={status === null} onClick={() => setStatus(null)} />
         {FILTERABLE_STATUSES.map((value) => (

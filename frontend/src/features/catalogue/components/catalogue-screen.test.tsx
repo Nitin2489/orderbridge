@@ -122,6 +122,25 @@ describe("CatalogueScreen", () => {
     expect(screen.getByText("3 products")).toBeInTheDocument();
   });
 
+  it("names each product with a level-2 heading under the page's h1", async () => {
+    renderCatalogue({ "GET /retailer/catalogue": page([biscuits, detergent, tea]) });
+    await screen.findByRole("article", { name: "Glucose biscuit 75 g" });
+
+    expect(screen.getByRole("heading", { level: 1, name: "Catalogue" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(
+      expect.arrayContaining(["Glucose biscuit 75 g", "Detergent powder 1 kg"]),
+    );
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+  });
+
+  it("wraps the category chips so the last one is never cut off", async () => {
+    renderCatalogue({ "GET /retailer/catalogue": page([biscuits]) });
+    const group = await screen.findByRole("group", { name: "Filter by category" });
+
+    expect(group).toHaveClass("flex-wrap");
+    expect(group).not.toHaveClass("overflow-x-auto");
+  });
+
   it("shows SKU, category, pack size, price with GST treatment, stock and scheme", async () => {
     renderCatalogue({ "GET /retailer/catalogue": page([biscuits, detergent, tea]) });
 

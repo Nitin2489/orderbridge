@@ -59,6 +59,8 @@ describe("header sign-out", () => {
     expect(queryClient.isFetching({ queryKey: ["unrelated"] })).toBe(1);
     expect(button).toBeEnabled();
     expect(spinnerIn(button)).toBeNull();
+    // At least 44 x 44 px.
+    expect(button).toHaveClass("h-11", "min-w-11");
   });
 
   it("shows a spinner and is disabled only while signing out, then goes to sign-in", async () => {

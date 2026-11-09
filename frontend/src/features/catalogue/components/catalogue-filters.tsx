@@ -90,8 +90,10 @@ export function CatalogueFilters({
         <div
           role="group"
           aria-label="Filter by category"
-          // Scrolls sideways on narrow screens instead of wrapping into rows.
-          className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0"
+          // Wraps at every width, so on a 320 px phone every category,
+          // including the last, is fully visible and tappable (a sideways
+          // scrolling row cut the last chip off with no hint it scrolled).
+          className="flex flex-wrap gap-2"
         >
           <CategoryChip
             label="All"

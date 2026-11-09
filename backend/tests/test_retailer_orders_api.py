@@ -36,6 +36,7 @@ from app.models import (
     Scheme,
     User,
 )
+from app.services import desk_order_service
 from app.services.order_service import (
     ConfirmationOutcome,
     confirm_order,
@@ -885,3 +886,55 @@ def test_submitted_order_confirms_without_price_changes(sharma, db_session):
     assert product_by_sku(db_session, BISCUIT).stock_quantity == 329
     assert product_by_sku(db_session, DETERGENT).stock_quantity == 80
     assert sharma.get(f"{ORDERS}/{order['id']}").json()["status"] == "confirmed"
+
+
+# ---------------------------------------------------------------------------
+# Rejection reason, for the owning retailer only
+# ---------------------------------------------------------------------------
+
+
+def _reject(db_session, order_id: str, reason: str) -> None:
+    desk = db_session.scalar(select(User).where(User.phone_number == DESK_PHONE))
+    desk_order_service.reject_order(
+        db_session, UUID(order_id), reason=reason, rejected_by_user_id=desk.id
+    )
+    db_session.commit()
+
+
+def test_owner_sees_the_rejection_reason(client, db_session):
+    login(client, SHARMA_PHONE)
+    order = submitted(client, db_session, [(BISCUIT, 1)])
+    assert client.get(f"{ORDERS}/{order['id']}").json()["rejection_reason"] is None
+
+    _reject(db_session, order["id"], "  Shop closed for renovation  ")
+
+    detail = client.get(f"{ORDERS}/{order['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "rejected"
+    assert detail.json()["rejection_reason"] == "Shop closed for renovation"
+    # Only the reason: no actor or other event details.
+    assert "actor" not in detail.text and "events" not in detail.json()
+    # The list stays a summary.
+    assert "rejection_reason" not in client.get(ORDERS).json()["items"][0]
+
+
+def test_another_retailer_cannot_see_a_rejection_reason(client, db_session):
+    login(client, GUPTA_PHONE)
+    gupta_order = submitted(client, db_session, [(DETERGENT, 1)])
+    _reject(db_session, gupta_order["id"], "Credit review pending")
+
+    login(client, SHARMA_PHONE)
+    response = client.get(f"{ORDERS}/{gupta_order['id']}")
+
+    assert response.status_code == 404
+    assert "Credit review pending" not in response.text
+
+
+def test_orders_that_are_not_rejected_have_no_reason(client, db_session):
+    login(client, SHARMA_PHONE)
+    order = submitted(client, db_session, [(BISCUIT, 1)])
+
+    detail = client.get(f"{ORDERS}/{order['id']}").json()
+
+    assert detail["status"] == "pending_review"
+    assert detail["rejection_reason"] is None

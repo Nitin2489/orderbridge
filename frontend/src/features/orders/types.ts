@@ -43,6 +43,8 @@ export const retailerOrderSummarySchema = z.object({
 export const retailerOrderDetailSchema = retailerOrderSummarySchema.extend({
   notes: z.string().nullable(),
   items: z.array(orderLineSchema),
+  /** The order desk's reason, only on a rejected order. */
+  rejection_reason: z.string().nullable().optional(),
 });
 
 /** RetailerOrderPage: GET /retailer/orders. */

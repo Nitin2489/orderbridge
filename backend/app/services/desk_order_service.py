@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
     Order,
+    OrderCapture,
     OrderEvent,
     OrderEventType,
     OrderItem,
@@ -84,6 +85,8 @@ class DeskOrderView:
     order: Order  # items loaded, sorted by line_number
     retailer: Retailer
     events: list[EventRow]  # chronological
+    # The message capture the order was created from, if any.
+    capture_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -212,8 +215,14 @@ def get_desk_order(session: Session, order_id: UUID) -> DeskOrderView | None:
     if order is None:
         return None
 
+    capture_id = session.scalar(
+        select(OrderCapture.id).where(OrderCapture.order_id == order.id).limit(1)
+    )
     return DeskOrderView(
-        order=order, retailer=order.retailer, events=_events(session, order.id)
+        order=order,
+        retailer=order.retailer,
+        events=_events(session, order.id),
+        capture_id=capture_id,
     )
 
 

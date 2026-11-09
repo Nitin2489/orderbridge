@@ -146,14 +146,24 @@ class RetailerOrderSummary(BaseModel):
 class RetailerOrderDetail(RetailerOrderSummary):
     notes: str | None
     items: list[OrderLineResponse]
+    rejection_reason: str | None = Field(
+        default=None,
+        description=(
+            "The order desk's reason, only for a rejected order of the signed-in "
+            "retailer; null otherwise."
+        ),
+    )
 
     @classmethod
-    def from_order_with_items(cls, order: Order) -> "RetailerOrderDetail":
+    def from_order_with_items(
+        cls, order: Order, rejection_reason: str | None = None
+    ) -> "RetailerOrderDetail":
         summary = RetailerOrderSummary.from_order(order, len(order.items))
         return cls(
             **summary.model_dump(),
             notes=order.notes,
             items=[OrderLineResponse.from_item(item) for item in order.items],
+            rejection_reason=rejection_reason,
         )
 
 

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -8,10 +8,26 @@ import { ThemeScript } from "@/providers/theme-provider";
 
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
+// Inter, self-hosted: the Latin subset, plus a ~1 KB file holding only the ₹
+// sign, so price pages do not download Inter's 85 KB Latin Extended subset
+// for one glyph (see src/app/fonts/README.md). No external font requests.
+const inter = localFont({
+  src: "./fonts/inter-latin-var.woff2",
+  weight: "100 900",
+  style: "normal",
   display: "swap",
   variable: "--font-inter",
+});
+
+const interRupee = localFont({
+  src: "./fonts/inter-rupee-var.woff2",
+  weight: "100 900",
+  style: "normal",
+  display: "swap",
+  variable: "--font-inter-rupee",
+  preload: false,
+  adjustFontFallback: false,
+  declarations: [{ prop: "unicode-range", value: "U+20B9" }],
 });
 
 export const metadata: Metadata = {
@@ -35,7 +51,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={inter.variable} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.variable} ${interRupee.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <ThemeScript />
       </head>

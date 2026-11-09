@@ -23,8 +23,11 @@ const STATE: Record<StepState, { icon: LucideIcon; tone: string; spoken: string 
 /** Where the order is inside OrderBridge. Nothing about delivery. */
 export function OrderProgress({
   order,
+  rejectionReason = null,
 }: {
   order: Pick<RetailerOrderSummary, "status" | "created_at" | "confirmed_at">;
+  /** The order desk's reason, shown only for a rejected order. */
+  rejectionReason?: string | null;
 }) {
   const steps = orderProgress(order);
   if (!steps) {
@@ -63,6 +66,12 @@ export function OrderProgress({
           );
         })}
       </ol>
+      {order.status === "rejected" && rejectionReason ? (
+        <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+          <p className="font-medium">Reason from the order desk</p>
+          <p className="mt-1 break-words whitespace-pre-line">{rejectionReason}</p>
+        </div>
+      ) : null}
     </section>
   );
 }

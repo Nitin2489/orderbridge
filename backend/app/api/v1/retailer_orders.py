@@ -269,7 +269,9 @@ def get_order(
     if order is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=ORDER_NOT_FOUND)
 
-    return RetailerOrderDetail.from_order_with_items(order)
+    return RetailerOrderDetail.from_order_with_items(
+        order, retailer_order_service.rejection_reason(db, order)
+    )
 
 
 @router.post(

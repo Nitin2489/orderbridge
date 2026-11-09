@@ -54,7 +54,7 @@ function withLine(capture: CaptureDetail, number: number, patch: Partial<Capture
 
 describe("CaptureReviewScreen", () => {
   it("shows the message unchanged, rule-based, with each line's original words and choices", async () => {
-    await renderReview();
+    const { user } = await renderReview();
 
     expect(screen.getByText(/not an AI model/)).toBeInTheDocument();
     expect(screen.getByText(/“bhaiya” \(greeting\)/)).toBeInTheDocument();
@@ -63,7 +63,19 @@ describe("CaptureReviewScreen", () => {
     expect(first.getByText("Suggested")).toBeInTheDocument();
     expect(first.getByText("60/100 · Possible match")).toBeInTheDocument();
     expect(first.getByText(/'chhota' does not identify a pack size/)).toBeInTheDocument();
-    // Two alternatives, marked as weak.
+    // Collapsed: only the suggestion, without its detailed reasons.
+    expect(first.getAllByRole("radio", { name: /SKU/ })).toHaveLength(1);
+    expect(first.queryByText("Weak match")).not.toBeInTheDocument();
+    expect(first.queryByText(/Recognised 'biscuit'/)).not.toBeInTheDocument();
+    const toggle = first.getByRole("button", { name: "Show alternatives (2)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Expanded: two alternatives, marked as weak, and every reason.
+    await user.click(toggle);
+    expect(first.getByRole("button", { name: "Hide alternatives" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(first.getAllByRole("radio", { name: /SKU/ })).toHaveLength(3);
     expect(first.getAllByText("Weak match")).toHaveLength(2);
     // The unit is never pre-selected.
     expect(first.getByRole("radio", { name: "Cases" })).not.toBeChecked();
@@ -72,6 +84,76 @@ describe("CaptureReviewScreen", () => {
 
     // Tea is out of stock and says so; it is not hidden.
     expect(within(lineCard(3)).getAllByText("Out of stock").length).toBeGreaterThan(0);
+  });
+
+  it("says when the AI reader read the message", async () => {
+    const description =
+      "Read by an AI language model (Gemini); products were matched by OrderBridge's rules.";
+    await renderReview({
+      [DETAIL]: json(
+        200,
+        makeCapture({
+          interpretation: {
+            name: "gemini@1",
+            kind: "language_model",
+            is_ai_model: true,
+            description,
+            fallback_note: null,
+          },
+        }),
+      ),
+    });
+
+    expect(await screen.findByText(new RegExp(description.replace(/[().]/g, "\\$&")))).toBeInTheDocument();
+    expect(screen.queryByText(/not an AI model/)).not.toBeInTheDocument();
+  });
+
+  it("tells the desk its order goes to the queue, and a retailer that the desk confirms it", async () => {
+    await renderReview();
+    expect(await screen.findByText(/adds it to the order queue, where it is confirmed/)).toBeInTheDocument();
+    expect(screen.queryByText(/the order desk confirms it/)).not.toBeInTheDocument();
+  });
+
+  it("tells a retailer that the order desk confirms the order", async () => {
+    await renderReview({}, { role: "retailer" });
+    expect(await screen.findByText(/until you create the order and the order desk confirms it/)).toBeInTheDocument();
+    expect(screen.queryByText(/adds it to the order queue/)).not.toBeInTheDocument();
+  });
+
+  it("says when the AI reader was not used and the rules read the message", async () => {
+    const note = "The AI reader did not answer in time. The rule-based reader was used instead.";
+    await renderReview({
+      [DETAIL]: json(
+        200,
+        makeCapture({
+          interpretation: {
+            name: "rules@1",
+            kind: "rules",
+            is_ai_model: false,
+            description: "Rule-based interpretation. Not an AI model.",
+            fallback_note: note,
+          },
+        }),
+      ),
+    });
+
+    expect(await screen.findByText(note)).toBeInTheDocument();
+    expect(screen.getByText(/not an AI model/)).toBeInTheDocument();
+  });
+
+  it("gives each line's quantity section and field a distinct name", async () => {
+    await renderReview();
+
+    for (const number of [1, 2, 3]) {
+      const card = within(lineCard(number));
+      expect(card.getByRole("region", { name: `Quantity for line ${number}` })).toBeInTheDocument();
+      const field = card
+        .getAllByLabelText(`Quantity for line ${number}`)
+        .find((element) => element.tagName === "INPUT");
+      expect(field).toBeDefined();
+    }
+    // Sighted users still see just "Quantity".
+    expect(within(lineCard(1)).getByText("Quantity", { selector: "h4" })).toBeInTheDocument();
   });
 
   it("asks for the unit before confirming the quantity", async () => {
@@ -202,6 +284,7 @@ describe("CaptureReviewScreen", () => {
     const first = within(lineCard(1));
     expect(first.queryByRole("checkbox")).not.toBeInTheDocument();
 
+    await user.click(first.getByRole("button", { name: "Show alternatives (2)" }));
     await user.click(first.getByRole("radio", { name: /Detergent Powder 1kg/ }));
 
     expect(
@@ -209,10 +292,42 @@ describe("CaptureReviewScreen", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a chosen alternative visible after hiding the others", async () => {
+    const { user } = await renderReview();
+    const first = within(lineCard(1));
+
+    await user.click(first.getByRole("button", { name: "Show alternatives (2)" }));
+    await user.click(first.getByRole("radio", { name: /Detergent Powder 1kg/ }));
+    await user.click(first.getByRole("button", { name: "Hide alternatives" }));
+
+    // The suggestion and the chosen product stay; one alternative is hidden.
+    expect(first.getAllByRole("radio", { name: /SKU/ })).toHaveLength(2);
+    expect(first.getByRole("radio", { name: /Detergent Powder 1kg/ })).toBeChecked();
+    expect(first.getByRole("button", { name: "Show alternatives (1)" })).toBeInTheDocument();
+  });
+
+  it("shows every option when there is no suggestion", async () => {
+    const capture = makeCapture();
+    const line = capture.lines[0]!;
+    const unproposed = withLine(capture, 1, {
+      match: {
+        ...line.match,
+        proposal: null,
+        alternatives: [line.match.proposal!, ...line.match.alternatives].slice(0, 2),
+      },
+    });
+    await renderReview({ [DETAIL]: json(200, unproposed) });
+    const first = within(lineCard(1));
+
+    expect(first.getAllByRole("radio", { name: /SKU/ })).toHaveLength(2);
+    expect(first.queryByRole("button", { name: /alternatives|match details/ })).not.toBeInTheDocument();
+  });
+
   it("never offers an alias to a retailer", async () => {
     const { user } = await renderReview({}, { role: "retailer" });
     const first = within(lineCard(1));
 
+    await user.click(first.getByRole("button", { name: "Show alternatives (2)" }));
     await user.click(first.getByRole("radio", { name: /Detergent Powder 1kg/ }));
 
     expect(first.queryByRole("checkbox")).not.toBeInTheDocument();
