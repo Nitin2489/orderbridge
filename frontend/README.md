@@ -10,11 +10,13 @@ a same-origin API proxy.
 (`/retailer/orders`) and message capture (`/retailer/capture`). Order desk:
 queue with at-a-glance counts and order review (confirm with credit holds,
 or reject) at `/desk`, message capture review at `/desk/captures`, and the
-Tally CSV export at `/desk/exports`.
+Tally CSV export (plus an experimental TallyPrime XML download) at
+`/desk/exports`.
 
-Message capture uses deterministic rule-based interpretation and matching
-(not an AI model): a person decides every line and its unit before an order
-is created, and the order desk confirms it as usual.
+Message capture is read by deterministic rules by default, or by an optional,
+validated Gemini reader configured on the backend. Either way, a person
+decides every line and its unit before an order is created, and the order
+desk confirms it as usual.
 
 The Tally export is a generic, line-level CSV sales register, not a verified
 native Tally import: ledgers, GST and voucher types must be mapped in Tally.
@@ -125,12 +127,11 @@ Browser ──/api/v1/...──▶ Next.js (same origin) ──rewrite──▶ 
   holds the affected action until then: Continue for that number, Resend
   (its countdown is extended), or Verify (the typed digits are kept).
 
-Demo accounts (seeded by the backend): retailers `9000000001`, `9000000002`,
-`9000000003`; order desk `9000000010`.
+The synthetic demo accounts are created by `backend/seed.py`.
 
 Reviewer access (`features/auth/components/reviewer-access.tsx`): when the
 backend offers it (`GET /auth/demo-access`), the number step shows a
-collapsed "Reviewer access" panel. The evaluator enters the private key once;
+collapsed "Reviewer access" panel. The reviewer enters the private key once;
 it is posted to `POST /auth/demo-access`, the field is cleared, and the key is
 never kept in state, the query cache, storage or a URL. The backend's
 HttpOnly cookie then lets the code step show a demo account's code.
@@ -172,12 +173,12 @@ written to `src/components/ui` using the tokens in `src/app/globals.css`.
 - Accessibility: skip link, visible focus rings, `aria-current` on the active
   navigation item, and Radix primitives for keyboard and focus management.
 
-## Deployment (planned)
+## Deployment
 
-The frontend deploys independently, for example on Vercel:
+The frontend is deployed on Vercel (full steps in `../docs/development.md`):
 
-1. Set `BACKEND_ORIGIN` to the backend's public origin (for example the Render
-   service URL) in the build environment.
+1. Set `BACKEND_ORIGIN` to the backend's public origin (the Render service
+   URL) in the build environment.
 2. On the backend, set `FRONTEND_ORIGINS` to the frontend's public origin and
    keep `AUTH_SESSION_COOKIE_SECURE=true` with `AUTH_SESSION_COOKIE_SAMESITE=lax`.
 

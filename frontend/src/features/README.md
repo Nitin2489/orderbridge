@@ -19,7 +19,8 @@ Existing modules:
 - `catalogue/`: the retailer catalogue (`GET /retailer/catalogue` and
   `/categories`), with search, category filter, stock and scheme display.
 - `cart/`: the retailer cart and order submission (`POST /retailer/orders`):
-  an in-memory cart scoped to the signed-in retailer, idempotent submission
+  a cart scoped to the signed-in retailer (product ids and quantities kept
+  in this device's storage, never prices), idempotent submission
   and the order confirmation.
 - `orders/`: retailer order history (`GET /retailer/orders`), order details
   (`GET /retailer/orders/{id}`) and repeat ordering

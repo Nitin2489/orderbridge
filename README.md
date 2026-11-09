@@ -10,40 +10,29 @@ order messages are turned into reviewable lines instead of being retyped.
 The order desk confirms orders against live stock and credit and exports
 them for Tally.
 
-> **Live demo:** _<live demo URL, to be added after deployment>_
->
-> Built for the IsoCode Labs take-home assignment. Client brief:
-> [`docs/assignment-brief.md`](docs/assignment-brief.md).
+- **Live app:** <https://orderbridge-ten.vercel.app>
+- **Backend API:** <https://orderbridge-vaia.onrender.com> (health check:
+  `/health`)
+- **Source:** <https://github.com/Nitin2489/orderbridge>
 
----
-
-## Try it
-
-| Role | Mobile number | Account |
-|---|---|---|
-| Retailer | 9000000001 | Sharma General Store |
-| Retailer | 9000000002 | Gupta Kirana Store |
-| Retailer | 9000000003 | Patel Provision Store |
-| Order desk | 9000000010 | Order Desk Operator |
-
-All accounts and data are synthetic. Sign-in uses one-time codes. The demo
-has no SMS provider, so the codes for these four accounts are shown on the
-sign-in page only after **Reviewer access** is unlocked with a private key
-supplied with the submission. The key is never stored in this repository.
+All accounts and data in the live app are synthetic. Sign-in uses one-time
+codes and no SMS provider is connected, so demo access is available on
+request. The backend runs on a sleeping hosting plan: the first request
+after a quiet period can take up to about a minute.
 
 ---
 
 ## The problem
 
-A Jabalpur distributor serves 1,800 shops. Orders arrive as notebook
-entries, WhatsApp texts, photos and voice notes. Every morning an office team
-retypes them into Tally. Salesmen cannot see stock or schemes at the counter,
-so lines are cut later, and about 5% of orders contain a wrong item or
+A distributor serving around 1,800 shops receives orders as notebook
+entries, WhatsApp texts, photos and voice notes. Every morning an office
+team retypes them into Tally. Salesmen cannot see stock or schemes at the
+counter, so lines are cut later, and some orders contain a wrong item or
 quantity.
 
-OrderBridge builds the core path that removes the retyping and the guesswork:
-**catalogue → cart → order → desk confirmation → Tally CSV**, plus
-**message → reviewed lines → order**.
+OrderBridge covers the core path that removes the retyping and the
+guesswork: **catalogue → cart → order → desk confirmation → Tally export**,
+plus **message → reviewed lines → order**.
 
 ---
 
@@ -53,26 +42,30 @@ OrderBridge builds the core path that removes the retyping and the guesswork:
 - **Catalogue** with the retailer's own case price, the exact unit price,
   stock status and the current scheme explained with a worked example. Every
   price says "excl. GST".
-- **Cart** with an exact estimated subtotal and quick submission. Submission
-  is idempotent, so a retried request never creates a second order.
-- **Order history** with progress, details and **repeat order**.
+- **Cart** with an exact estimated subtotal and quick submission. The cart
+  survives a page reload on the same device, and submission is idempotent,
+  so a retried request never creates a second order.
+- **Order history** with progress, details, the desk's reason for a
+  rejection and **repeat order**.
 - **Message capture:** paste an order message and review it line by line
   before it becomes an order.
 
 ### For the order desk (desktop friendly)
 - **At-a-glance summary** and an oldest-first **order queue**.
 - **Order review at current prices:** stored and current figures side by
-  side, with any changes highlighted.
+  side, with any changes highlighted, and a link back to the original
+  message for captured orders.
 - **Confirmation with stock and credit checks.** Stock and the retailer's
   balance change together in one transaction. An order over the credit limit
   goes **on hold** instead of being confirmed. Orders can be rejected with a
   reason.
-- **Capture review** for any retailer, and saving a corrected phrase as that
-  retailer's alias.
-- **Tally-oriented CSV export:** a generic sales-register CSV for Tally's
-  import mapping. Each export batch is stored, and downloads are checked
-  against their SHA-256. This is **not** a verified native Tally integration;
-  ledgers, GST and vouchers are mapped in Tally.
+- **Capture review** for any retailer, a warning before the same message is
+  captured twice, and saving a corrected phrase as that retailer's alias.
+- **Tally export:** a generic sales-register CSV for Tally's import mapping,
+  with every batch stored and downloads checked against their SHA-256. An
+  **experimental TallyPrime XML** voucher download is available once the
+  ledger names are configured. Neither is a verified native Tally
+  integration; GST stays in Tally.
 
 ### Scheme engine
 - **Free goods** (buy 10 cases, get 1 free) and **slab discounts** (3% off 5
@@ -83,11 +76,7 @@ OrderBridge builds the core path that removes the retyping and the guesswork:
 
 ---
 
-## Message capture: rule-based, by design
-
-Capture uses **deterministic rule-based extraction and matching. It is not
-an AI or language model.** The same message always gives the same result,
-and every suggestion can be explained.
+## Message capture
 
 ```
 bhaiya 5 peti biscuit chhota, 2 peti washing powder 1 kilo, chai patti 250 wala 1 peti
@@ -98,6 +87,13 @@ bhaiya 5 peti biscuit chhota, 2 peti washing powder 1 kilo, chai patti 250 wala 
 | 5 peti biscuit chhota | Glucose biscuit 75 g | possible ("chhota" is not a size) |
 | 2 peti washing powder 1 kilo | Detergent powder 1 kg | strong |
 | chai patti 250 wala 1 peti | Tea leaf 250 g | strong, **out of stock** |
+
+By default the message is read by **deterministic rules**: the same message
+always gives the same result, and every suggestion can be explained. An
+optional **Gemini** reader can propose the lines instead. Its output is
+validated against the original message, quantities, units and products are
+still decided by OrderBridge's own code, and any failure falls back to the
+rules. Only the message text and product names are sent to it.
 
 How it handles uncertainty:
 - Each line keeps its **original words** and shows a **heuristic match
@@ -110,6 +106,8 @@ How it handles uncertainty:
   order that the desk still confirms.
 - **Desk corrections can become aliases** for that retailer, and an existing
   alias is never overwritten silently.
+- **Prices are never calculated by the reader.** Prices, schemes, stock,
+  credit and totals always come from the backend.
 
 ---
 
@@ -123,7 +121,8 @@ How it handles uncertainty:
 - **Security:**
   - OTP sign-in: hashed single-use codes, expiry, attempt limits, lockout and
     rate limits.
-  - HttpOnly session cookies and trusted-origin (CSRF) checks.
+  - HttpOnly session cookies, trusted-origin (CSRF) checks, `no-store` on
+    API responses and security headers on every page.
   - Role-based access on every route, so a retailer sees only their own
     prices, credit and orders.
   - Validated inputs and outputs, and production settings that refuse unsafe
@@ -131,9 +130,13 @@ How it handles uncertainty:
 - **States everywhere:** loading skeletons, empty states and recoverable
   errors, with no automatic retries of anything that changes data.
 - **Tests:**
-  - Backend: 1,000+ pytest tests on a real PostgreSQL database.
-  - Frontend: 570+ Vitest and Testing Library tests.
-  - End to end: Playwright tests against the running stack.
+  - Backend: 1,167 pytest tests on a real PostgreSQL database,
+    including confirmation, credit holds, concurrency, capture and export.
+  - Frontend: 618 Vitest and Testing Library tests.
+  - End to end: 6 Playwright tests against the running stack, covering
+    sign-in, role isolation, sign-out, message capture review and (opt-in,
+    on a disposable database) the full order path from message to Tally
+    export.
 
 ## Tech stack
 
@@ -141,9 +144,9 @@ How it handles uncertainty:
 |---|---|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, TanStack Query, zod |
 | Backend | Python 3.12, FastAPI, Pydantic, SQLAlchemy 2, Alembic |
-| Database | PostgreSQL 17 |
+| Database | PostgreSQL 18 (Render, deployed); PostgreSQL 17 in Docker for local development |
 | Testing | pytest, Vitest, Testing Library, Playwright |
-| Hosting (planned) | Vercel (frontend), Render (backend), managed PostgreSQL |
+| Hosting | Vercel (frontend), Render web service (backend), Render PostgreSQL (Singapore) |
 
 The browser talks only to the frontend's origin. Next.js forwards `/api/*` to
 the FastAPI backend, so the session cookie is first-party.
@@ -154,12 +157,9 @@ the FastAPI backend, so the session cookie is first-party.
 
 | Document | Contents |
 |---|---|
-| [`deployment.md`](deployment.md) | Local setup step by step, running the tests, deployment, environment variables, demo logins |
-| [`docs/technical-design.md`](docs/technical-design.md) | Architecture, data model, main flows, how capture works, UI decisions, labelled assumptions, what was cut |
-| [`docs/requirements-tracker.md`](docs/requirements-tracker.md) | Status of every requirement in the brief |
-| [`docs/assignment-brief.md`](docs/assignment-brief.md) | The original client brief |
-
-**Running it locally:** follow [`deployment.md`](deployment.md).
+| [`docs/development.md`](docs/development.md) | Local setup, running the tests, how it is deployed, environment variables, known limitations |
+| [`frontend/README.md`](frontend/README.md) | Frontend structure, API calls, sign-in and sessions |
+| [`frontend/e2e/README.md`](frontend/e2e/README.md) | Running the end-to-end tests |
 
 ## Limits and next steps
 
@@ -168,19 +168,17 @@ the FastAPI backend, so the session cookie is first-party.
 - The interface is in English only (capture understands Hinglish and some
   Devanagari).
 - Capture is text only.
+- The Tally XML has not been imported into a live Tally company.
 - Per-IP rate limits are shared behind the hosting proxy.
 
-**Not built:**
+**Not built yet:**
 - Photo and Hindi voice capture.
 - Salesman offline mode.
 - Van loading lists.
-- The 14-day inactive-retailer dashboard.
+- An inactive-retailer dashboard.
 - Credit-hold release.
 
-**Out of scope in the brief:** delivery tracking, payments and GST
-e-invoicing.
-
-The reasoning and the plan for each are in the technical design document.
+**Out of scope:** delivery tracking, payments and GST e-invoicing.
 
 ## License
 

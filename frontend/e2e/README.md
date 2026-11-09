@@ -52,6 +52,20 @@ export, because that would change seeded orders to Exported. It reuses the
 desk sign-in rather than signing in again, to stay within the code request
 limit below.
 
+## Full order path (opt-in, changes data)
+
+`order-flow.spec.ts` drives the whole path in a real browser: a retailer
+captures a message and creates an order, then the order desk confirms it
+and exports it to the Tally CSV. It creates, confirms and exports an order,
+so it is skipped unless `E2E_ORDER_FLOW=1`. Run it only against a
+disposable database that has just been migrated and seeded with `seed.py`
+alone (no `seed_demo.py`), with the backend and frontend pointed at it,
+never against the development or production database:
+
+```bash
+E2E_ORDER_FLOW=1 E2E_OTP_OUTBOX=../.dev-otp-outbox.jsonl npx playwright test e2e/order-flow.spec.ts
+```
+
 `E2E_BASE_URL` overrides the frontend URL (default `http://localhost:3000`).
 Use `localhost`, not `127.0.0.1`: the browser's `Origin` must match
 `FRONTEND_ORIGINS` exactly, or the backend rejects sign-in with 403.
